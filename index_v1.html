@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mega Route Planner Pro</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Alpine.js for simple browser reactive states -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans">
+
+    <div x-data="routePlanner()" class="flex flex-col h-screen">
+        <!-- Header -->
+        <header class="bg-gray-800 border-b border-gray-700 p-4 flex justify-between items-center">
+            <h1 class="text-xl font-bold tracking-wide text-emerald-400">⚡ Mega Route & Supercharger Planner</h1>
+            <div class="text-sm bg-gray-900 px-3 py-1.5 rounded border border-gray-700 text-gray-400">
+                Destinations: <span class="text-white font-bold" x-text="destinations.length"></span> / 200
+            </div>
+        </header>
+
+        <!-- Main Dashboard Layout -->
+        <div class="flex flex-1 overflow-hidden">
+            
+            <!-- Left Panel: Input & Destination Management -->
+            <main class="w-5/12 bg-gray-800/50 p-6 flex flex-col h-full border-r border-gray-800">
+                <!-- Add Destination Form -->
+                <form @submit.prevent="addStop" class="mb-6">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Add New Stop</label>
+                    <div class="flex gap-2">
+                        <input x-model="newTitle" type="text" placeholder="e.g., Zion National Park, Denver, Acadia..." 
+                               class="flex-1 bg-gray-900 border border-gray-700 rounded px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2 rounded transition">
+                            Add
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Scrollable Stops List -->
+                <div class="flex-1 overflow-y-auto pr-2 space-y-3">
+                    <template x-for="(stop, index) in destinations" :key="stop.id">
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 shadow-sm relative group">
+                            <div class="flex justify-between items-start mb-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-6 h-6 rounded-full bg-gray-700 flex items-center justify-center text-xs font-bold text-gray-300" x-text="index + 1"></span>
+                                    <h3 class="font-bold text-white text-base" x-text="stop.title"></h3>
+                                </div>
+                                
+                                <!-- Move & Delete Actions -->
+                                <div class="flex gap-1">
+                                    <button @click="moveUp(index)" :disabled="index === 0" class="text-gray-400 hover:text-white p-1 disabled:opacity-30">▲</button>
+                                    <button @click="moveDown(index)" :disabled="index === destinations.length - 1" class="text-gray-400 hover:text-white p-1 disabled:opacity-30">▼</button>
+                                    <button @click="removeStop(index)" class="text-red-400 hover:text-red-300 p-1 ml-2">✕</button>
+                                </div>
+                            </div>
+
+                            <!-- Contextual Controls (Hide for the starting location) -->
+                            <div class="grid grid-cols-2 gap-3 pt-2 border-t border-gray-700/50" x-show="index > 0">
+                                <div>
+                                    <label class="block text-[10px] font-semibold uppercase text-gray-400 mb-1">Travel Mode</label>
+                                    <select x-model="stop.mode" @change="recalculate" class="w-full bg-gray-900 border border-gray-700 rounded p-1 text-xs text-gray-200">
+                                        <option value="drive">🚗 Drive</option>
+                                        <option value="flight">✈️ Flight</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-semibold uppercase text-gray-400 mb-1">Stay Duration</label>
+                                    <div class="flex items-center bg-gray-900 border border-gray-700 rounded px-2 py-1">
+                                        <input type="number" x-model.number="stop.days" @input="recalculate" min="0" class="w-full bg-transparent text-xs text-white focus:outline-none">
+                                        <span class="text-[10px] text-gray-500 uppercase ml-1">Days</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Tesla Specific Layer Toggle -->
+                            <div class="mt-2 flex items-center gap-2" x-show="index > 0 && stop.mode === 'drive'">
+                                <input type="checkbox" x-model="stop.showChargers" @change="recalculate" :id="'tesla-' + stop.id" class="rounded bg-gray-900 border-gray-700 text-emerald-500 focus:ring-0">
+                                <label :for="'tesla-' + stop.id" class="text-[11px] text-gray-400 cursor-pointer hover:text-gray-300">Overlay Tesla Superchargers</label>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </main>
+
+            <!-- Right Panel: Map Visualization & Metrics Dashboard -->
+            <section class="w-7/12 p-6 flex flex-col h-full space-y-6">
+                <!-- Topline Stats Deck -->
+                <div class="grid grid-cols-4 gap-4">
+                    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                        <span class="text-xs font-semibold uppercase text-gray-400">Total Distance</span>
+                        <div class="text-2xl font-black text-emerald-400 mt-1"><span x-text="stats.distance"></span> <span class="text-xs font-normal text-gray-400">mi</span></div>
+                    </div>
+                    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                        <span class="text-xs font-semibold uppercase text-gray-400">Transit Time</span>
+                        <div class="text-2xl font-black text-blue-400 mt-1"><span x-text="stats.transitTime"></span> <span class="text-xs font-normal text-gray-400">hrs</span></div>
+                    </div>
+                    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                        <span class="text-xs font-semibold uppercase text-gray-400">Time at Locations</span>
+                        <div class="text-2xl font-black text-purple-400 mt-1"><span x-text="stats.stayDays"></span> <span class="text-xs font-normal text-gray-400">days</span></div>
+                    </div>
+                    <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                        <span class="text-xs font-semibold uppercase text-gray-400">Total Horizon</span>
+                        <div class="text-2xl font-black text-amber-400 mt-1"><span x-text="stats.totalHorizon"></span> <span class="text-xs font-normal text-gray-400">days</span></div>
+                    </div>
+                </div>
+
+                <!-- Simulated Route Visualization Canvas -->
+                <div class="flex-1 bg-gray-950 rounded-xl border border-gray-800 relative flex items-center justify-center p-4 overflow-hidden">
+                    <div class="absolute top-4 left-4 bg-gray-900/80 px-3 py-1.5 rounded border border-gray-800 text-xs text-gray-400 z-10">
+                        🗺️ Visual Route Matrix Topology
+                    </div>
+                    
+                    <!-- Dynamic SVG Canvas Mapping Points -->
+                    <svg class="w-full h-full max-h-[400px]" viewBox="0 0 800 400">
+                        <!-- Simulated Grid Lines for Visual depth -->
+                        <g stroke="#1e293b" stroke-width="0.5" stroke-dasharray="5,5">
+                            <line x1="0" y1="100" x2="800" y2="100"/>
+                            <line x1="0" y1="200" x2="800" y2="200"/>
+                            <line x1="0" y1="300" x2="800" y2="300"/>
+                            <line x1="200" y1="0" x2="200" y2="400"/>
+                            <line x1="400" y1="0" x2="400" y2="400"/>
+                            <line x1="600" y1="0" x2="600" y2="400"/>
+                        </g>
+
+                        <!-- Route vectors connecting points -->
+                        <template x-for="(point, i) in mapCoordinates" :key="'line-'+i">
+                            <g x-show="i < mapCoordinates.length - 1">
+                                <!-- Base Route Vector -->
+                                <line :x1="point.x" :y1="point.y" 
+                                      :x2="mapCoordinates[i+1].x" :y2="mapCoordinates[i+1].y"
+                                      :stroke="point.nextMode === 'flight' ? '#60a5fa' : '#34d399'"
+                                      :stroke-dasharray="point.nextMode === 'flight' ? '6,6' : '0'"
+                                      stroke-width="3" stroke-linecap="round"/>
+                                
+                                <!-- Tesla Supercharger simulated node midpoints along drive legs -->
+                                <template x-if="point.nextMode === 'drive' && point.showChargers">
+                                    <g>
+                                        <circle :cx="(point.x + mapCoordinates[i+1].x)/2 - 20" :cy="(point.y + mapCoordinates[i+1].y)/2 - 10" r="5" fill="#ef4444" class="animate-pulse"/>
+                                        <circle :cx="(point.x + mapCoordinates[i+1].x)/2 + 20" :cy="(point.y + mapCoordinates[i+1].y)/2 + 15" r="5" fill="#ef4444" class="animate-pulse"/>
+                                    </g>
+                                </template>
+                            </g>
+                        </template>
+
+                        <!-- Render city anchor points -->
+                        <template x-for="(point, i) in mapCoordinates" :key="'node-'+i">
+                            <g>
+                                <circle :cx="point.x" :cy="point.y" r="8" :fill="i === 0 ? '#fbbf24' : '#10b981'" stroke="#111827" stroke-width="2"/>
+                                <text :x="point.x" :y="point.y - 14" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle" x-text="(i+1) + '. ' + point.title"></text>
+                            </g>
+                        </template>
+                    </svg>
+
+                    <!-- Legend Overlays -->
+                    <div class="absolute bottom-4 right-4 flex gap-4 bg-gray-900/90 p-3 rounded border border-gray-800 text-xs">
+                        <div class="flex items-center gap-1.5"><span class="w-3 h-0.5 bg-emerald-400 inline-block"></span> Drive</div>
+                        <div class="flex items-center gap-1.5"><span class="w-3 h-0.5 border-t-2 border-dashed border-blue-400 inline-block"></span> Flight</div>
+                        <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span> Supercharger</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Application Script Architecture -->
+    <script>
+        function routePlanner() {
+            return {
+                newTitle: '',
+                destinations: [
+                    { id: 1, title: 'San Francisco, CA', mode: 'drive', days: 0, showChargers: true },
+                    { id: 2, title: 'Zion National Park, UT', mode: 'drive', days: 3, showChargers: true },
+                    { id: 3, title: 'Denver, CO', mode: 'drive', days: 4, showChargers: true }
+                ],
+                stats: { distance: 0, transitTime: 0, stayDays: 0, totalHorizon: 0 },
+                mapCoordinates: [],
+
+                init() {
+                    this.recalculate();
+                },
+
+                addStop() {
+                    if (!this.newTitle.trim() || this.destinations.length >= 200) return;
+                    this.destinations.push({
+                        id: Date.now(),
+                        title: this.newTitle.trim(),
+                        mode: 'drive',
+                        days: 2,
+                        showChargers: true
+                    });
+                    this.newTitle = '';
+                    this.recalculate();
+                },
+
+                removeStop(index) {
+                    this.destinations.splice(index, 1);
+                    this.recalculate();
+                },
+
+                moveUp(index) {
+                    if (index === 0) return;
+                    const el = this.destinations.splice(index, 1)[0];
+                    this.destinations.splice(index - 1, 0, el);
+                    this.recalculate();
+                },
+
+                moveDown(index) {
+                    if (index === this.destinations.length - 1) return;
+                    const el = this.destinations.splice(index, 1)[0];
+                    this.destinations.splice(index + 1, 0, el);
+                    this.recalculate();
+                },
+
+                recalculate() {
+                    let totalDistance = 0;
+                    let totalTransitTime = 0;
+                    let totalStayDays = 0;
+
+                    // Compute topology coordinates relative to SVG canvas mapping
+                    const coords = [];
+                    const steps = this.destinations.length;
+
+                    this.destinations.forEach((stop, i) => {
+                        totalStayDays += stop.days;
+
+                        // Calculate mock step-by-step math metrics
+                        if (i > 0) {
+                            const isDrive = stop.mode === 'drive';
+                            const legDistance = isDrive ? 450 : 950; // simulated distances
+                            const legTime = isDrive ? Math.round(legDistance / 60) : Math.round(legDistance / 450);
+
+                            totalDistance += legDistance;
+                            totalTransitTime += legTime;
+                        }
+
+                        // Distribute points visually across canvas layout width
+                        const xPadding = 80;
+                        const yPadding = 60;
+                        const x = steps > 1 ? xPadding + (i * (800 - (xPadding * 2)) / (steps - 1)) : 400;
+                        // alternate height to create wave pathing visual
+                        const y = 200 + (Math.sin(i * 1.5) * 80);
+
+                        coords.push({
+                            title: stop.title,
+                            x: x,
+                            y: y,
+                            nextMode: stop.mode,
+                            showChargers: stop.showChargers
+                        });
+                    });
+
+                    this.mapCoordinates = coords;
+                    this.stats.distance = totalDistance;
+                    this.stats.transitTime = totalTransitTime;
+                    this.stats.stayDays = totalStayDays;
+                    // Days on road can be estimated relative to drive time hours vs days plus stay duration
+                    this.stats.totalHorizon = totalStayDays + Math.ceil(totalTransitTime / 8);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

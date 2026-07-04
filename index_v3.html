@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid EV Route Planner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen antialiased flex flex-col h-screen relative">
+
+    <header class="bg-gray-800 border-b border-gray-700 p-4 flex justify-between items-center shrink-0">
+        <h1 class="text-xl font-bold text-emerald-400 flex items-center gap-2">
+            ⚡ Hybrid Route & EV Planner
+        </h1>
+        <div class="flex items-center gap-3">
+            <div id="stop-counter" class="text-sm bg-gray-900 px-3 py-1 rounded border border-gray-700 text-gray-400">
+                Stops: 0 / 200
+            </div>
+            <button onclick="toggleModal(true)" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold text-sm px-4 py-1.5 rounded border border-gray-600 transition flex items-center gap-1">
+                ⚙️ Settings
+            </button>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden">
+        
+        <div class="w-5/12 bg-gray-800/40 border-r border-gray-800 flex flex-col h-full p-6">
+            
+            <form id="add-form" class="mb-4 shrink-0 relative">
+                <label class="block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Search Location</label>
+                <div class="flex gap-2">
+                    <div class="relative flex-1">
+                        <input type="text" id="location-search" autocomplete="off" placeholder="Search for a city, park, or address..." 
+                               class="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-emerald-500 text-sm" 
+                               oninput="handleSearch(this.value)">
+                        
+                        <div id="search-results" class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl hidden z-[1000] max-h-48 overflow-y-auto">
+                            </div>
+                    </div>
+                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded text-sm transition shrink-0">
+                        + Add Stop
+                    </button>
+                </div>
+            </form>
+
+            <div id="status-console" class="hidden mb-4 p-2 bg-black rounded text-[10px] text-green-400 font-mono h-24 overflow-y-auto border border-gray-700"></div>
+
+            <div id="timeline-container" class="flex-1 overflow-y-auto pr-2 space-y-3">
+                </div>
+        </div>
+
+        <div class="w-7/12 p-6 flex flex-col h-full space-y-4">
+            <div class="grid grid-cols-3 gap-4 shrink-0">
+                <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Route Distance</div>
+                    <div class="text-2xl font-black text-emerald-400 mt-1"><span id="stat-distance">0</span> <span class="text-sm font-normal text-gray-400">mi</span></div>
+                </div>
+                <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Travel Hours</div>
+                    <div class="text-2xl font-black text-blue-400 mt-1"><span id="stat-time">0</span> <span class="text-sm font-normal text-gray-400">hrs</span></div>
+                </div>
+                <div class="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Projected Horizon</div>
+                    <div class="text-2xl font-black text-amber-400 mt-1"><span id="stat-days">0</span> <span class="text-sm font-normal text-gray-400">days</span></div>
+                </div>
+            </div>
+
+            <div class="flex-1 bg-gray-950 rounded-xl border border-gray-800 relative overflow-hidden shadow-inner">
+                <div id="map" class="w-full h-full z-0"></div>
+                <button id="calc-btn-floating" onclick="calculateRoute()" class="absolute bottom-4 left-4 z-[1000] bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg shadow-lg border border-blue-500 tracking-wide transition duration-150">
+                    Calculate Map Route
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+        <div class="bg-gray-800 border border-gray-700 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-5 pb-3 border-b border-gray-700">
+                <h2 class="text-sm font-bold uppercase tracking-wider text-gray-300">⚙️ Core Configuration</h2>
+                <button onclick="toggleModal(false)" class="text-gray-400 hover:text-white font-bold w-6 h-6 rounded-full flex items-center justify-center border border-gray-700">✕</button>
+            </div>
+            <div class="space-y-5">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Routing Engine</label>
+                    <select id="engine-select" onchange="updateSettings('engine', this.value)" class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-white focus:outline-none">
+                        <option value="standard">Standard (Free Local Math)</option>
+                        <option value="chargetrip">Chargetrip API (Real EV Engine)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Recalculation Strategy</label>
+                    <select id="auto-calc-select" onchange="updateSettings('autoCalc', this.value === 'true')" class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-white focus:outline-none">
+                        <option value="false">Manual Execution</option>
+                        <option value="true">Automatic Pipeline</option>
+                    </select>
+                </div>
+                <div id="standard-settings" class="pt-2">
+                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5 flex justify-between">
+                        <span>Simulated EV Range</span>
+                        <span id="range-display" class="text-xs font-bold text-emerald-400 bg-gray-950 px-2 py-0.5 rounded border border-gray-700">260 mi</span>
+                    </label>
+                    <div class="flex items-center gap-3">
+                        <span class="text-[10px] text-gray-600">50mi</span>
+                        <input type="range" id="range-slider" min="50" max="750" step="10" value="260" class="flex-1 accent-emerald-500 cursor-pointer" oninput="updateSettings('vehicleRange', parseInt(this.value, 10))">
+                        <span class="text-[10px] text-gray-600">750mi</span>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-end">
+                <button onclick="toggleModal(false); calculateRoute();" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-5 py-2.5 rounded-lg transition">Save & Run</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // SYSTEM CONTEXT
+        // ==========================================
+        const CHARGETRIP_CLIENT_ID = 'YOUR_CLIENT_ID_HERE'; 
+        const CHARGETRIP_APP_ID = 'YOUR_APP_ID_HERE';       
+
+        // Dynamic local database acting as a cache for coordinates
+        let geoDatabase = {
+            "San Francisco, CA": { lat: 37.7749, lng: -122.4194 },
+            "Denver, CO": { lat: 39.7392, lng: -104.9903 },
+            "Philadelphia, PA": { lat: 39.9526, lng: -75.1652 },
+            "Toronto, ON": { lat: 43.6510, lng: -79.3470 }
+        };
+
+        let appSettings = { engine: 'standard', autoCalc: false, vehicleRange: 260 };
+
+        let stops = [
+            { id: "1", key: "San Francisco, CA", mode: "drive", days: 1, showChargers: true },
+            { id: "2", key: "Denver, CO", mode: "drive", days: 3, showChargers: true },
+            { id: "3", key: "Philadelphia, PA", mode: "drive", days: 4, showChargers: true },
+            { id: "4", key: "Toronto, ON", mode: "drive", days: 3, showChargers: true }
+        ];
+
+        let map, mapLayers = [];
+
+        // ==========================================
+        // PERSISTENCE LOGIC
+        // ==========================================
+        function saveState() {
+            const state = { stops, appSettings, geoDatabase };
+            localStorage.setItem('hybridRoutePlanner', JSON.stringify(state));
+        }
+
+        function loadState() {
+            const saved = localStorage.getItem('hybridRoutePlanner');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed.stops) stops = parsed.stops;
+                if (parsed.appSettings) {
+                    appSettings = parsed.appSettings;
+                    document.getElementById('range-slider').value = appSettings.vehicleRange;
+                    document.getElementById('range-display').innerText = `${appSettings.vehicleRange} mi`;
+                    document.getElementById('engine-select').value = appSettings.engine;
+                    document.getElementById('auto-calc-select').value = appSettings.autoCalc.toString();
+                }
+                if (parsed.geoDatabase) geoDatabase = parsed.geoDatabase;
+            }
+        }
+
+        // ==========================================
+        // OPENSTREETMAP GEOCODING LOGIC
+        // ==========================================
+        let searchTimeout = null;
+        let currentSelectedGeo = null;
+
+        function handleSearch(query) {
+            const resultsBox = document.getElementById('search-results');
+            if (!query || query.length < 3) {
+                resultsBox.classList.add('hidden');
+                return;
+            }
+            
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(query)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        resultsBox.innerHTML = '';
+                        if (data.length === 0) {
+                            resultsBox.innerHTML = '<div class="p-3 text-xs text-gray-400">No matching locations found.</div>';
+                        } else {
+                            data.forEach(item => {
+                                const nameParts = item.display_name.split(',');
+                                const shortName = nameParts[0] + (nameParts[1] ? ',' + nameParts[1] : '');
+                                
+                                const div = document.createElement('div');
+                                div.className = 'p-3 border-b border-gray-700 text-xs text-white hover:bg-gray-700 cursor-pointer transition';
+                                div.innerText = shortName;
+                                div.onclick = () => {
+                                    document.getElementById('location-search').value = shortName;
+                                    currentSelectedGeo = {
+                                        key: shortName,
+                                        lat: parseFloat(item.lat),
+                                        lng: parseFloat(item.lon)
+                                    };
+                                    resultsBox.classList.add('hidden');
+                                };
+                                resultsBox.appendChild(div);
+                            });
+                        }
+                        resultsBox.classList.remove('hidden');
+                    })
+                    .catch(err => {
+                        console.error('Geocoding failed:', err);
+                    });
+            }, 800);
+        }
+
+        // ==========================================
+        // UI & EVENT CONTROLLERS
+        // ==========================================
+        function toggleModal(open) {
+            const modal = document.getElementById('settings-modal');
+            if (open) modal.classList.remove('hidden');
+            else modal.classList.add('hidden');
+        }
+
+        function initMap() {
+            map = L.map('map', { center: [39.8283, -98.5795], zoom: 4 });
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CARTO' }).addTo(map);
+            renderTimelineUI(); 
+            calculateRoute();
+        }
+
+        function updateSettings(key, value) {
+            appSettings[key] = value;
+            if (key === 'vehicleRange') document.getElementById('range-display').innerText = `${value} mi`;
+            if (key === 'engine') {
+                document.getElementById('status-console').style.display = value === 'chargetrip' ? 'block' : 'none';
+                document.getElementById('standard-settings').style.opacity = value === 'chargetrip' ? '0.3' : '1';
+            }
+            handleStateChange();
+        }
+
+        function changeMode(id, value) { stops.find(s => s.id === id).mode = value; handleStateChange(); }
+        function changeDays(id, value) { stops.find(s => s.id === id).days = parseInt(value) || 0; handleStateChange(); }
+        function toggleChargers(id, checked) { stops.find(s => s.id === id).showChargers = checked; handleStateChange(); }
+        function removeStop(index) { stops.splice(index, 1); handleStateChange(); }
+
+        function moveStop(index, direction) {
+            if (direction === -1 && index === 0) return;
+            if (direction === 1 && index === stops.length - 1) return;
+            const temp = stops[index];
+            stops[index] = stops[index + direction];
+            stops[index + direction] = temp;
+            handleStateChange();
+        }
+
+        document.getElementById('add-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (stops.length >= 200) return;
+            
+            if (!currentSelectedGeo) {
+                alert("Please type a location and click an option from the dropdown results.");
+                return;
+            }
+
+            const key = currentSelectedGeo.key;
+            geoDatabase[key] = { lat: currentSelectedGeo.lat, lng: currentSelectedGeo.lng };
+
+            stops.push({ id: String(Date.now()), key: key, mode: "drive", days: 2, showChargers: true });
+            
+            currentSelectedGeo = null;
+            document.getElementById('location-search').value = '';
+            
+            handleStateChange();
+        });
+
+        function handleStateChange() {
+            saveState();
+            renderTimelineUI(); 
+            if (appSettings.autoCalc) {
+                calculateRoute();
+            } else {
+                const btnFloating = document.getElementById('calc-btn-floating');
+                btnFloating.classList.remove('bg-blue-600', 'hover:bg-blue-500');
+                btnFloating.classList.add('bg-emerald-600', 'hover:bg-emerald-500', 'animate-pulse');
+                btnFloating.innerText = "Recalculate Path Required \u2192";
+            }
+        }
+
+        function logConsole(msg) {
+            const el = document.getElementById('status-console');
+            el.innerHTML += `<div>> ${msg}</div>`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function clearMapLayers() {
+            mapLayers.forEach(layer => map.removeLayer(layer));
+            mapLayers = [];
+        }
+
+        function renderTimelineUI() {
+            document.getElementById('stop-counter').innerText = `Stops: ${stops.length} / 200`;
+            let htmlContent = '';
+
+            stops.forEach((stop, index) => {
+                htmlContent += `
+                    <div class="bg-gray-800 p-3 rounded-xl border border-gray-700 relative">
+                        <div class="flex justify-between items-start">
+                            <div class="flex items-center gap-2">
+                                <span class="w-5 h-5 rounded-full bg-gray-700 flex items-center justify-center text-[10px] font-bold text-gray-300">${index + 1}</span>
+                                <h3 class="font-bold text-white text-sm truncate max-w-[200px]" title="${stop.key}">${stop.key}</h3>
+                            </div>
+                            <div class="flex gap-1 shrink-0">
+                                <button onclick="moveStop(${index}, -1)" class="text-gray-400 hover:text-white px-1 text-xs" ${index === 0 ? 'disabled' : ''}>▲</button>
+                                <button onclick="moveStop(${index}, 1)" class="text-gray-400 hover:text-white px-1 text-xs" ${index === stops.length - 1 ? 'disabled' : ''}>▼</button>
+                                <button onclick="removeStop(${index})" class="text-red-400 hover:text-red-300 px-1 text-xs ml-1">✕</button>
+                            </div>
+                        </div>
+
+                        ${index === 0 ? `
+                            <div class="mt-2 pt-2 border-t border-gray-700/50 text-[11px] text-emerald-500 font-bold tracking-wider uppercase text-center bg-emerald-900/20 rounded py-1.5">
+                                🏁 Start & Finish Hub
+                            </div>
+                        ` : `
+                            <div class="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-gray-700/50">
+                                <select onchange="changeMode('${stop.id}', this.value)" class="bg-gray-900 border border-gray-700 rounded p-1 text-[11px] text-white">
+                                    <option value="drive" ${stop.mode === 'drive' ? 'selected' : ''}>🚗 Drive Into</option>
+                                    <option value="flight" ${stop.mode === 'flight' ? 'selected' : ''}>✈️ Fly Into</option>
+                                </select>
+                                <div class="flex items-center bg-gray-900 border border-gray-700 rounded px-2 text-[11px]">
+                                    <span class="text-gray-500 mr-1">Stay:</span>
+                                    <input type="number" value="${stop.days}" oninput="changeDays('${stop.id}', this.value)" class="w-full bg-transparent text-white focus:outline-none py-1 min-w-[20px]">
+                                </div>
+                            </div>
+                        `}
+                        
+                        ${index > 0 && stop.mode === 'drive' ? `
+                        <div class="mt-2 flex items-center gap-2">
+                            <input type="checkbox" id="tesla-${stop.id}" ${stop.showChargers ? 'checked' : ''} onchange="toggleChargers('${stop.id}', this.checked)" class="rounded bg-gray-900 border-gray-700 text-emerald-500 cursor-pointer">
+                            <label for="tesla-${stop.id}" class="text-[10px] font-medium text-gray-400 cursor-pointer hover:text-gray-200">Show Map Chargers</label>
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            document.getElementById('timeline-container').innerHTML = htmlContent;
+        }
+
+        async function calculateRoute() {
+            const btnFloating = document.getElementById('calc-btn-floating');
+            btnFloating.classList.remove('bg-emerald-600', 'hover:bg-emerald-500', 'animate-pulse');
+            btnFloating.classList.add('bg-blue-600', 'hover:bg-blue-500');
+            btnFloating.innerText = "Computing Paths...";
+            btnFloating.disabled = true;
+
+            clearMapLayers();
+            
+            let totalDistance = 0, totalTransitTime = 0, totalDays = 0;
+            let mapLatLngBounds = [];
+
+            stops.forEach((stop, index) => {
+                if (index > 0) totalDays += stop.days; // Don't count days for the starting hub
+                const geo = geoDatabase[stop.key];
+                if (geo) {
+                    const marker = L.circleMarker([geo.lat, geo.lng], {
+                        radius: index === 0 ? 8 : 6, fillColor: index === 0 ? '#fbbf24' : '#10b981', color: '#111827', weight: 2, fillOpacity: 0.9
+                    }).addTo(map).bindPopup(`<b>${index === 0 ? 'Start/Finish' : index + 1}. ${stop.key}</b>`);
+                    mapLayers.push(marker);
+                    mapLatLngBounds.push([geo.lat, geo.lng]);
+                }
+            });
+
+            if (appSettings.engine === 'standard') {
+                for (let i = 1; i <= stops.length; i++) {
+                    if (i === stops.length && stops.length < 2) break;
+
+                    const isReturnLeg = i === stops.length;
+                    const prevStop = stops[i-1];
+                    const currentStop = isReturnLeg ? stops[0] : stops[i];
+
+                    const prevGeo = geoDatabase[prevStop.key];
+                    const currentGeo = geoDatabase[currentStop.key];
+                    
+                    const isDrive = isReturnLeg ? true : currentStop.mode === 'drive';
+
+                    const R = 3958.8; 
+                    const dLat = (currentGeo.lat - prevGeo.lat) * Math.PI / 180;
+                    const dLng = (currentGeo.lng - prevGeo.lng) * Math.PI / 180;
+                    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(prevGeo.lat * Math.PI / 180) * Math.cos(currentGeo.lat * Math.PI / 180) * Math.sin(dLng/2) * Math.sin(dLng/2);
+                    const directDistance = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+                    const legMiles = Math.round(isDrive ? directDistance * 1.25 : directDistance);
+                    const legHours = isDrive ? Math.round((legMiles / 62) * 10) / 10 : Math.round(((legMiles / 500) + 1.5) * 10) / 10;
+
+                    totalDistance += legMiles;
+                    totalTransitTime += legHours;
+
+                    const polyline = L.polyline([[prevGeo.lat, prevGeo.lng], [currentGeo.lat, currentGeo.lng]], {
+                        color: isDrive ? '#34d399' : '#38bdf8', weight: 4, dashArray: isDrive ? null : '6, 8', opacity: 0.85
+                    }).addTo(map);
+                    mapLayers.push(polyline);
+
+                    const renderChargers = isReturnLeg ? stops[0].showChargers : currentStop.showChargers;
+
+                    if (isDrive && renderChargers && appSettings.vehicleRange > 0) {
+                        const numChargers = Math.floor(legMiles / appSettings.vehicleRange);
+                        for (let j = 1; j <= numChargers; j++) {
+                            const f = j / (numChargers + 1);
+                            const mLat = prevGeo.lat + (currentGeo.lat - prevGeo.lat) * f;
+                            const mLng = prevGeo.lng + (currentGeo.lng - prevGeo.lng) * f;
+                            const cMarker = L.circleMarker([mLat, mLng], { radius: 4, fillColor: '#ef4444', color: '#7f1d1d', weight: 1, fillOpacity: 1 }).addTo(map).bindPopup('Mock Supercharger');
+                            mapLayers.push(cMarker);
+                        }
+                    }
+                }
+            } else {
+                logConsole("API functionality reserved for active Chargetrip keys.");
+            }
+
+            document.getElementById('stat-distance').innerText = totalDistance.toLocaleString();
+            document.getElementById('stat-time').innerText = Math.round(totalTransitTime);
+            document.getElementById('stat-days').innerText = totalDays + Math.ceil(totalTransitTime / 8);
+
+            if (mapLatLngBounds.length > 0 && map) map.fitBounds(mapLatLngBounds, { padding: [40, 40] });
+            
+            btnFloating.innerText = "Calculate Map Route";
+            btnFloating.disabled = false;
+        }
+
+        window.onload = () => {
+            loadState();
+            initMap();
+        };
+        
+        document.addEventListener('click', (e) => {
+            if(!e.target.closest('#add-form')) {
+                document.getElementById('search-results').classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
