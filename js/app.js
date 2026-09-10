@@ -44,7 +44,19 @@ window.updateSettings = function(key, value) {
 };
 
 async function startApp() {
-    loadState();
+    
+    // Check if we were told to load a specific trip via the trip switcher
+    const forcedTripId = localStorage.getItem('nifty_force_load_trip');
+    if (forcedTripId) {
+        localStorage.removeItem('nifty_force_load_trip'); // clear it
+        loadState(forcedTripId);
+    } else {
+        loadState(); // loads most recent
+    }
+
+    // Sync the UI input with the loaded trip name
+    const titleInput = document.getElementById('trip-name-input');
+    if (titleInput && state.tripName) titleInput.value = state.tripName;
     
     // Safety check for POI cache
     if (state && !state.savedPOIs) state.savedPOIs = [];
@@ -102,5 +114,9 @@ document.addEventListener('click', (e) => {
     }
     if (!e.target.closest('#add-checklist-item-popover') && !(e.target.tagName === 'BUTTON' && e.target.textContent.includes('Add checklist item'))) {
         if (typeof window.closeAddChecklistItemPopover === 'function') window.closeAddChecklistItemPopover();
+    }
+    if (!e.target.closest('#trip-dropdown-menu') && !e.target.closest('button[onclick="window.toggleTripMenu()"]')) {
+        const menu = document.getElementById('trip-dropdown-menu');
+        if (menu) menu.classList.add('hidden');
     }
 });

@@ -37,30 +37,75 @@ export const state = {
     mapLayers: [],
     currentSelectedGeo: null,
     currentSelectedKeyDateGeo: null,
-    searchTimeout: null
+    searchTimeout: null,
+    activeTripId: 'default',
+    tripName: 'My Trip',
 };
 
-// --- CENTRALIZED PERSISTENCE ---
+
+// --- CENTRALIZED PERSISTENCE (UPGRADED FOR MULTI-TRIP) ---
+
+export function getSavedTripsIndex() {
+    return JSON.parse(localStorage.getItem('nifty_trip_index') || '[]');
+}
 
 export function saveState() {
-    // We package the entire state object into one single JSON block
     const dataToSave = { 
         stops: state.stops, 
         appSettings: state.appSettings, 
         geoDatabase: state.geoDatabase, 
         keyDates: state.keyDates,
         savedPOIs: state.savedPOIs,
-        includeTraffic: state.appSettings.includeTraffic // Synced up from settings block
+        includeTraffic: state.appSettings.includeTraffic,
+        tripName: state.tripName
     };
-    localStorage.setItem('hybridRoutePlanner', JSON.stringify(dataToSave));
+    
+    // 1. Save the actual trip data to its unique slot
+    localStorage.setItem(`nifty_trip_${state.activeTripId}`, JSON.stringify(dataToSave));
+
+    // 2. Update the Master Index
+    let index = getSavedTripsIndex();
+    const existing = index.find(t => t.id === state.activeTripId);
+    if (existing) {
+        existing.name = state.tripName;
+        existing.updatedAt = Date.now();
+    } else {
+        index.push({ id: state.activeTripId, name: state.tripName, updatedAt: Date.now() });
+    }
+    localStorage.setItem('nifty_trip_index', JSON.stringify(index));
 }
 
-export function loadState() {
-    const saved = localStorage.getItem('hybridRoutePlanner');
+export function loadState(specificTripId = null) {
+    // ONE-TIME MIGRATION: Move old single-save data into the new multi-trip format
+    const legacyData = localStorage.getItem('hybridRoutePlanner');
+    if (legacyData) {
+        localStorage.setItem('nifty_trip_default', legacyData);
+        localStorage.setItem('nifty_trip_index', JSON.stringify([{ id: 'default', name: 'My First Trip', updatedAt: Date.now() }]));
+        localStorage.removeItem('hybridRoutePlanner'); // Clean up old key
+    }
+
+    let index = getSavedTripsIndex();
+    
+    // If no specific trip requested, load the most recently updated one, or create a default
+    if (!specificTripId) {
+        if (index.length === 0) {
+            state.activeTripId = 'default';
+            state.tripName = 'New Trip';
+            return; 
+        }
+        // Sort by newest first
+        index.sort((a, b) => b.updatedAt - a.updatedAt);
+        specificTripId = index[0].id;
+    }
+
+    const saved = localStorage.getItem(`nifty_trip_${specificTripId}`);
     if (!saved) return;
 
     try {
         const parsed = JSON.parse(saved);
+        state.activeTripId = specificTripId;
+        state.tripName = parsed.tripName || index.find(t => t.id === specificTripId)?.name || 'Unnamed Trip';
+        
         // Deep merge/overwrite the state object safely
         if (parsed.stops) state.stops = parsed.stops;
         if (parsed.keyDates) state.keyDates = parsed.keyDates;
@@ -68,18 +113,12 @@ export function loadState() {
         if (parsed.savedPOIs) state.savedPOIs = parsed.savedPOIs;
         if (parsed.appSettings) {
             state.appSettings = { ...state.appSettings, ...parsed.appSettings };
-            
-            // Sync any existing range layout sliders you have bound
-            const rangeInput = document.getElementById('range-slider');
-            if (rangeInput) rangeInput.value = state.appSettings.vehicleRange;
-            const rangeDisplay = document.getElementById('range-display');
-            if (rangeDisplay) rangeDisplay.innerText = `${state.appSettings.vehicleRange} mi`;
         }
         if (parsed.hasOwnProperty('includeTraffic')) {
             state.appSettings.includeTraffic = parsed.includeTraffic;
         }
     } catch (e) {
-        console.error("Failed to load state:", e);
+        console.error("Failed to load state for trip:", specificTripId, e);
     }
 }
 
@@ -89,14 +128,16 @@ export function exportToFile() {
         appSettings: state.appSettings, 
         geoDatabase: state.geoDatabase, 
         keyDates: state.keyDates,
-        savedPOIs: state.savedPOIs
+        savedPOIs: state.savedPOIs,
+        tripName: state.tripName // Added for multi-trip support
     };
     const jsonString = JSON.stringify(dataToSave, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ev-route-backup-${new Date().toISOString().split('T')[0]}.json`;
+    const safeName = (state.tripName || 'backup').replace(/[^a-z0-9]/gi, '-').toLowerCase();
+    a.download = `nifty-${safeName}-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
 }
@@ -114,10 +155,12 @@ export function importFromFile(event) {
                 if (parsed.keyDates) state.keyDates = parsed.keyDates;
                 if (parsed.appSettings) state.appSettings = { ...state.appSettings, ...parsed.appSettings };
                 if (parsed.savedPOIs) state.savedPOIs = parsed.savedPOIs;
+                if (parsed.tripName) state.tripName = parsed.tripName;
+                
                 saveState();
                 window.location.reload();
             } else {
-                alert("This doesn't look like a valid EV Route Planner backup file.");
+                alert("This doesn't look like a valid NIFTY backup file.");
             }
         } catch (err) {
             console.error(err);

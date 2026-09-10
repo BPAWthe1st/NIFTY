@@ -1,4 +1,4 @@
-import { state, saveState } from './state.js';
+import { state, saveState, getSavedTripsIndex } from './state.js';
 
 let placesService;
 let autocompleteService;
@@ -35,6 +35,14 @@ const CHECKLIST_HEADER_PX = 24;      // "Checklist" label + add button row
 const CHECKLIST_ITEM_PX = 22;        // height of a single checklist item row
 const CHECKLIST_EMPTY_PX = 22;       // height of the "no items yet" placeholder row
 const CHECKLIST_BOTTOM_PADDING_PX = 6;
+
+// Which stop the "add checklist item" typeahead popover is currently
+// targeting, and the place the person has actually selected from the
+// dropdown (a checklist item, like a stop, can only be confirmed once a real
+// place_id has been resolved to coordinates — typed free text alone isn't
+// enough to attach a pin).
+let checklistItemAddStopId = null;
+let checklistItemAddSelectedPlace = null; // { name, address, lat, lng } | null
 
 // Starter set of common POI categories shown as checkboxes in the scan
 // popover. `keyword` is what actually gets sent to Places nearbySearch;
@@ -223,6 +231,85 @@ window.handleEditStopKeydown = (e, id) => {
     }
 };
 
+window.renameCurrentTrip = (newName) => {
+    if (!newName.trim()) return;
+    state.tripName = newName.trim();
+    saveState();
+};
+
+window.toggleTripMenu = () => {
+    const menu = document.getElementById('trip-dropdown-menu');
+    const isHidden = menu.classList.contains('hidden');
+    
+    if (isHidden) {
+        // Re-render list before showing
+        const container = document.getElementById('trip-list-container');
+        const trips = getSavedTripsIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+        
+        container.innerHTML = trips.map(t => `
+            <div class="flex items-center justify-between px-3 py-2 hover:bg-gray-50 border-b border-gray-50 group cursor-pointer" onclick="window.switchTrip('${t.id}')">
+                <div class="flex-1 min-w-0 pr-2">
+                    <div class="text-sm font-bold truncate ${t.id === state.activeTripId ? 'text-emerald-600' : 'text-gray-800'}">
+                        ${t.id === state.activeTripId ? '✓ ' : ''}${t.name}
+                    </div>
+                    <div class="text-[9px] text-gray-400">Last updated: ${new Date(t.updatedAt).toLocaleDateString()}</div>
+                </div>
+                ${t.id !== state.activeTripId ? `
+                    <button onclick="event.stopPropagation(); window.deleteTrip('${t.id}')" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs px-2 py-1 font-bold transition-opacity">✕</button>
+                ` : ''}
+            </div>
+        `).join('');
+    }
+    
+    menu.classList.toggle('hidden');
+};
+
+window.switchTrip = (tripId) => {
+    if (tripId === state.activeTripId) return;
+    
+    // Save current before switching just in case
+    saveState();
+    
+    // The safest way to clear the Google Map and completely reset the UI 
+    // without memory leaks is to reload the page with a URL parameter, or 
+    // just let loadState run and rebuild everything. A page reload is cleanest.
+    localStorage.setItem('nifty_force_load_trip', tripId);
+    window.location.reload();
+};
+
+window.createNewTrip = () => {
+    saveState(); // Save current
+    
+    const newTripId = 'trip_' + Date.now();
+    localStorage.setItem('nifty_force_load_trip', newTripId); // Force load this next
+    
+    // Seed it with a blank template
+    const blankState = {
+        stops: [{ id: "1", key: "San Francisco, CA", mode: "drive", days: 1 }],
+        appSettings: { ...state.appSettings, startDate: new Date().toISOString().split('T')[0] },
+        geoDatabase: { "San Francisco, CA": { lat: 37.7749, lng: -122.4194 } },
+        keyDates: [],
+        savedPOIs: [],
+        tripName: "New Trip"
+    };
+    localStorage.setItem(`nifty_trip_${newTripId}`, JSON.stringify(blankState));
+    
+    window.location.reload();
+};
+
+window.deleteTrip = (tripId) => {
+    if (!confirm("Are you sure you want to permanently delete this trip?")) return;
+    
+    localStorage.removeItem(`nifty_trip_${tripId}`);
+    let index = getSavedTripsIndex();
+    index = index.filter(t => t.id !== tripId);
+    localStorage.setItem('nifty_trip_index', JSON.stringify(index));
+    
+    // Close and reopen menu to refresh UI
+    document.getElementById('trip-dropdown-menu').classList.add('hidden');
+    window.toggleTripMenu();
+};
+
 export async function handleSearch(query) {
     const resultsBox = document.getElementById('search-results');
     initGoogleServices();
@@ -259,23 +346,8 @@ export function handleFormSubmit(e) {
 }
 
 export function handleStateChange() {
-    // 1. Find the actual element handling the scroll (sidebar or window)
-    const container = document.getElementById('timeline-container');
-    const scrollParent = container ? (container.closest('.overflow-y-auto') || container.closest('.overflow-auto') || document.documentElement) : document.documentElement;
-    
-    // 2. Capture the true scroll position
-    const currentScroll = scrollParent.scrollTop;
-
     saveState();
-    
-    // 3. Rebuild the DOM
     if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI(); 
-    
-    // 4. Force the scroll position back immediately
-    if (container) {
-        scrollParent.scrollTop = currentScroll;
-    }
-
     if (typeof window.calculateRoute === 'function') {
         window.calculateRoute();
     }
@@ -547,7 +619,7 @@ function getFallbackStats(prevStop, currentStop) {
 window.removePOI = (poiId) => {
     if (!state.savedPOIs) return;
     state.savedPOIs = state.savedPOIs.filter(p => p.id !== poiId);
-    if(typeof window.handleStateChange === 'function') window.handleStateChange();
+    saveState();
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
 };
 
@@ -725,7 +797,13 @@ window.confirmAddToChecklist = () => {
 
     addChecklistItemToStop(stopId, { name: poi.name, address: poi.address, lat: poi.lat, lng: poi.lng, sourcePoiId: poi.id }, note);
     window.closeAddToChecklistPopover();
-    handleStateChange();
+    // Deliberately NOT calling handleStateChange()/calculateRoute() here —
+    // adding a checklist item doesn't change any stop's location or the
+    // legs between them, so there's nothing to recalculate. calculateRoute()
+    // also ends with fitBounds(), which would re-frame/zoom the map every
+    // time a POI is saved — jarring and unnecessary for a pure data save.
+    saveState();
+    if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
 };
 
@@ -758,9 +836,11 @@ window.removeChecklistItem = (stopId, itemId) => {
     const stop = state.stops.find(s => s.id === stopId);
     if (!stop || !stop.checklistItems) return;
     stop.checklistItems = stop.checklistItems.filter(i => i.id !== itemId);
-    handleStateChange();
-    // handleStateChange re-renders the timeline and (if autoCalc-equivalent
-    // path runs) the route, but never touches map pins on its own.
+    // Same reasoning as confirmAddToChecklist: no stop/leg/distance changed
+    // here, so skip handleStateChange()/calculateRoute() entirely to avoid
+    // an unnecessary fitBounds() re-zoom.
+    saveState();
+    if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
 };
 
@@ -795,6 +875,108 @@ window.promoteChecklistItemToStop = (stopId, itemId) => {
     handleStateChange();
 };
 
+function renderAddChecklistItemPopoverContent() {
+    const container = document.getElementById('add-checklist-item-popover');
+    if (!container) return;
+    container.innerHTML = `
+        <div class="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">Add a checklist item</div>
+        <div class="relative mb-2">
+            <input type="text" id="checklist-item-search" autocomplete="off" placeholder="Search for a place..." oninput="window.handleChecklistItemSearch(this.value)"
+                   class="w-full text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+            <div id="checklist-item-search-results" class="absolute top-full left-0 bg-white border border-gray-200 shadow-xl z-[150] hidden max-h-48 overflow-y-auto rounded-lg mt-1 overflow-hidden" style="width: max(100%, 320px);"></div>
+        </div>
+        <label class="block text-[9px] font-bold text-gray-400 uppercase tracking-wide mb-1">Why save this? (optional)</label>
+        <input type="text" id="checklist-item-note" placeholder="e.g. friend recommended the IPA" class="w-full text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+        <div class="flex justify-end gap-2 mt-3">
+            <button onclick="window.closeAddChecklistItemPopover()" class="text-xs text-gray-500 hover:text-gray-700 font-bold px-2 py-1">Cancel</button>
+            <button onclick="window.confirmAddChecklistItem()" class="text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded px-3 py-1.5 font-bold shadow-sm">Add</button>
+        </div>
+    `;
+}
+
+window.openAddChecklistItemPopover = (stopId, anchorEl) => {
+    checklistItemAddStopId = stopId;
+    checklistItemAddSelectedPlace = null;
+    let popover = document.getElementById('add-checklist-item-popover');
+    if (!popover) {
+        popover = document.createElement('div');
+        popover.id = 'add-checklist-item-popover';
+        popover.className = 'fixed bg-white border border-gray-200 rounded-lg shadow-2xl p-3 z-[3000] w-72';
+        document.body.appendChild(popover);
+    }
+    renderAddChecklistItemPopoverContent();
+    popover.classList.remove('hidden');
+
+    if (anchorEl) {
+        const rect = anchorEl.getBoundingClientRect();
+        const popoverWidth = 288; // matches w-72
+        let left = rect.left;
+        if (left + popoverWidth > window.innerWidth - 8) left = window.innerWidth - popoverWidth - 8;
+        popover.style.top = `${rect.bottom + 6}px`;
+        popover.style.left = `${Math.max(8, left)}px`;
+    }
+    setTimeout(() => {
+        const input = document.getElementById('checklist-item-search');
+        if (input) input.focus();
+    }, 50);
+};
+
+window.closeAddChecklistItemPopover = () => {
+    const popover = document.getElementById('add-checklist-item-popover');
+    if (popover) popover.classList.add('hidden');
+    checklistItemAddStopId = null;
+    checklistItemAddSelectedPlace = null;
+};
+
+window.handleChecklistItemSearch = (query) => {
+    const resultsBox = document.getElementById('checklist-item-search-results');
+    initGoogleServices();
+    checklistItemAddSelectedPlace = null; // typing again invalidates any prior selection
+    if (!query || query.length < 3 || !autocompleteService) return resultsBox && resultsBox.classList.add('hidden');
+
+    autocompleteService.getPlacePredictions({ input: query }, (predictions, status) => {
+        if (status !== google.maps.places.PlacesServiceStatus.OK || !predictions) return resultsBox.classList.add('hidden');
+        resultsBox.innerHTML = '';
+        predictions.forEach(pred => {
+            const div = document.createElement('div');
+            div.className = 'p-2 border-b border-gray-100 text-xs text-gray-800 hover:bg-blue-50 cursor-pointer truncate transition-colors';
+            div.innerText = pred.description;
+            div.onclick = async (e) => {
+                e.stopPropagation();
+                resultsBox.classList.add('hidden');
+                const searchInput = document.getElementById('checklist-item-search');
+                if (searchInput) searchInput.value = pred.description;
+                document.body.style.cursor = 'wait';
+                const coords = await getPlaceDetails(pred.place_id);
+                document.body.style.cursor = 'default';
+                if (coords) {
+                    checklistItemAddSelectedPlace = { name: pred.description, address: pred.description, lat: coords.lat, lng: coords.lng };
+                }
+            };
+            resultsBox.appendChild(div);
+        });
+        resultsBox.classList.remove('hidden');
+    });
+};
+
+window.confirmAddChecklistItem = () => {
+    if (!checklistItemAddStopId) return;
+    if (!checklistItemAddSelectedPlace) {
+        alert('Pick a place from the dropdown results first.');
+        return;
+    }
+    const noteInput = document.getElementById('checklist-item-note');
+    const note = noteInput ? noteInput.value.trim() : '';
+
+    addChecklistItemToStop(checklistItemAddStopId, checklistItemAddSelectedPlace, note);
+    window.closeAddChecklistItemPopover();
+    // Same reasoning as the other checklist mutations: no stop/leg changed,
+    // so skip handleStateChange()/calculateRoute() and its fitBounds re-zoom.
+    saveState();
+    if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
+    if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
+};
+
 function renderStopChecklistSection(stop, stopIndex) {
     if (!expandedChecklistStopIds.has(stop.id)) return '';
     const items = stop.checklistItems || [];
@@ -821,7 +1003,7 @@ function renderStopChecklistSection(stop, stopIndex) {
         <div class="absolute left-0 w-full bg-gray-50 border-l border-r border-b border-gray-200 rounded-b-md overflow-hidden" style="top: ${ROW_HEIGHT_PX}px;">
             <div class="flex items-center justify-between px-2" style="height: ${CHECKLIST_HEADER_PX}px;">
                 <span class="text-[9px] font-bold uppercase tracking-wider text-gray-400">Checklist</span>
-                <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${stopIndex}}, this)" class="text-[9px] text-emerald-600 hover:text-emerald-700 font-bold">+ Find places</button>
+                <button onclick="window.openAddChecklistItemPopover('${stop.id}', this)" class="text-[9px] text-emerald-600 hover:text-emerald-700 font-bold">+ Add checklist item</button>
             </div>
             ${itemsHtml}
             <div style="height: ${CHECKLIST_BOTTOM_PADDING_PX}px;"></div>
@@ -1148,7 +1330,7 @@ export function renderTimelineUI() {
                                 ` : `
                                     <div class="flex items-center bg-gray-50 rounded px-1 border border-gray-200">
                                         <span class="text-[9px] text-gray-400 font-bold mr-0.5">Stay:</span>
-                                        <input type="number" value="${stop.days}" onchange="changeDays('${stop.id}', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" class="w-6 bg-transparent text-gray-900 font-bold text-[11px] text-center focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                        <input type="number" value="${stop.days}" oninput="changeDays('${stop.id}', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" class="w-6 bg-transparent text-gray-900 font-bold text-[11px] text-center focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
                                     </div>
                                 `}
                                 <div class="text-[10px] font-bold flex items-center gap-0.5">
@@ -1223,7 +1405,7 @@ export function renderTimelineUI() {
 
                             <span class="text-[10px] text-blue-600 font-mono tracking-tighter truncate">${outgoingTransit.hours.toFixed(1)}h</span>
                             <div class="flex items-center bg-gray-50 rounded border border-gray-100 px-1 shrink-0">
-                                <input type="number" value="${outgoingTransit.days}" onchange="${outgoingTransit.isReturn ? `window.updateSettings('returnTransitDays', parseInt(this.value) || 0)` : `window.updateTransitDays('${outgoingTransit.id}', this.value)`}" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" class="w-4 bg-transparent text-[10px] text-amber-600 font-bold text-center focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                <input type="number" value="${outgoingTransit.days}" oninput="${outgoingTransit.isReturn ? `window.updateSettings('returnTransitDays', parseInt(this.value) || 0)` : `window.updateTransitDays('${outgoingTransit.id}', this.value)`}" class="w-6 bg-transparent text-[10px] text-amber-600 font-bold text-center focus:outline-none py-0">
                                 <span class="text-[8px] text-gray-400 uppercase tracking-widest font-bold">days</span>
                             </div>
                         </div>
