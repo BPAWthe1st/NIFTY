@@ -41,6 +41,9 @@ window.updateSettings = function(key, value) {
     if (typeof window.renderTimelineUI === 'function') {
         window.renderTimelineUI();
     }
+    if (typeof window.renderSavedPOIs === 'function') {
+        window.renderSavedPOIs();
+    }
 };
 
 async function startApp() {
@@ -69,6 +72,12 @@ async function startApp() {
         state.appSettings.showTimelineInactiveStops = true;
     }
     
+    const poiToggle = document.getElementById('show-poi-pins-toggle');
+    if (poiToggle) poiToggle.checked = state.appSettings.showPOIPins !== false;
+
+    const subStopToggle = document.getElementById('show-substop-pins-toggle');
+    if (subStopToggle) subStopToggle.checked = state.appSettings.showSubStopPins !== false;
+
     try {
         await loadGoogleMapsAPI();
         initMap();

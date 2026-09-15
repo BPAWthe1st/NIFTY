@@ -1,3 +1,4 @@
+// js/ui.js
 import { state, saveState, getSavedTripsIndex } from './state.js';
 
 let placesService;
@@ -5,49 +6,14 @@ let autocompleteService;
 let editingStopId = null; 
 let editingKeyDateId = null; 
 let tempEditKeyDateGeo = null; 
-let editingStopIsNewInsert = false; // true when the stop currently open for editing was just
-                                     // created by the inline "+" insert button and has no
-                                     // location set yet — lets cancelEditStop remove it instead
-                                     // of leaving a blank stop behind.
+let editingStopIsNewInsert = false;
 
-// The POI scan popover is a single shared element (like the autocomplete
-// dropdowns) rather than one copy per row/pill. `poiScanTarget` records what
-// it should search when "Search" is clicked: either a leg (prevIndex ->
-// currIndex, scanned along the driving route between them) or a single stop
-// (scanned in a radius around that one point, no route needed).
-let poiScanTarget = null; // { type: 'leg', prevIndex, currIndex } | { type: 'stop', stopIndex } | null
-
-// Tracks which saved POI the "add to stop checklist" popover is currently
-// acting on (its id), so the Confirm button knows what to attach once a
-// destination stop and note have been filled in.
+let poiScanTarget = null;
 let checklistAddPoiId = null;
-
-// Which stops currently have their checklist expanded inline in the
-// timeline. A Set of stop ids — toggled by clicking the checklist
-// expand/collapse control on a row. Expanded rows occupy extra vertical
-// space (see CHECKLIST_*_PX below), which is why the timeline's row-height
-// math has to support variable per-row heights rather than the fixed
-// ROW_HEIGHT_PX every row used before checklists existed.
 let expandedChecklistStopIds = new Set();
-
-// Sizing constants for the expanded checklist area under a stop row.
-const CHECKLIST_HEADER_PX = 24;      // "Checklist" label + add button row
-const CHECKLIST_ITEM_PX = 22;        // height of a single checklist item row
-const CHECKLIST_EMPTY_PX = 22;       // height of the "no items yet" placeholder row
-const CHECKLIST_BOTTOM_PADDING_PX = 6;
-
-// Which stop the "add checklist item" typeahead popover is currently
-// targeting, and the place the person has actually selected from the
-// dropdown (a checklist item, like a stop, can only be confirmed once a real
-// place_id has been resolved to coordinates — typed free text alone isn't
-// enough to attach a pin).
 let checklistItemAddStopId = null;
-let checklistItemAddSelectedPlace = null; // { name, address, lat, lng } | null
+let checklistItemAddSelectedPlace = null; 
 
-// Starter set of common POI categories shown as checkboxes in the scan
-// popover. `keyword` is what actually gets sent to Places nearbySearch;
-// `color` drives the marker pin color in renderSavedPOIs so categories stay
-// visually distinct on the map.
 export const POI_PRESET_CATEGORIES = [
     { keyword: 'Tesla Supercharger', label: '⚡ Tesla Supercharger', color: 'red' },
     { keyword: 'EV Charging Station', label: '🔌 EV Charging Station', color: 'red' },
@@ -58,15 +24,82 @@ export const POI_PRESET_CATEGORIES = [
     { keyword: 'Hotel', label: '🏨 Hotel', color: 'green' },
 ];
 
-const ROW_HEIGHT_PX = 34; // Every timeline row (active or skipped) is forced to this exact height
-                           // so the SVG connector math below can use reliable pixel offsets
-                           // instead of fragile CSS percentages.
-const GUTTER_WIDTH_PX = 24; // Width of the zigzag-line gutter that sits between the 60%-wide
-                             // stop column and the transit pill. The pill's own left offset
-                             // must equal `60% + GUTTER_WIDTH_PX` so it starts exactly where
-                             // the gutter (and therefore the connector line) ends — both the
-                             // SVG and the pill reference this one constant so they can't
-                             // drift out of sync with each other again.
+const ROW_HEIGHT_PX = 34; 
+const GUTTER_WIDTH_PX = 24; 
+const CHECKLIST_HEADER_PX = 24;      
+const CHECKLIST_ITEM_PX = 22;        
+const CHECKLIST_EMPTY_PX = 22;       
+const CHECKLIST_BOTTOM_PADDING_PX = 6;
+
+// --- MULTI-TRIP MANAGEMENT ---
+
+window.renameCurrentTrip = (newName) => {
+    if (!newName.trim()) return;
+    state.tripName = newName.trim();
+    saveState();
+};
+
+window.toggleTripMenu = () => {
+    const menu = document.getElementById('trip-dropdown-menu');
+    const isHidden = menu.classList.contains('hidden');
+    
+    if (isHidden) {
+        const container = document.getElementById('trip-list-container');
+        const trips = getSavedTripsIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+        
+        container.innerHTML = trips.map(t => `
+            <div class="flex items-center justify-between px-3 py-2 hover:bg-gray-50 border-b border-gray-50 group cursor-pointer" onclick="window.switchTrip('${t.id}')">
+                <div class="flex-1 min-w-0 pr-2">
+                    <div class="text-sm font-bold truncate ${t.id === state.activeTripId ? 'text-emerald-600' : 'text-gray-800'}">
+                        ${t.id === state.activeTripId ? '✓ ' : ''}${t.name}
+                    </div>
+                    <div class="text-[9px] text-gray-400">Last updated: ${new Date(t.updatedAt).toLocaleDateString()}</div>
+                </div>
+                ${t.id !== state.activeTripId ? `
+                    <button onclick="event.stopPropagation(); window.deleteTrip('${t.id}')" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs px-2 py-1 font-bold transition-opacity">✕</button>
+                ` : ''}
+            </div>
+        `).join('');
+    }
+    menu.classList.toggle('hidden');
+};
+
+window.switchTrip = (tripId) => {
+    if (tripId === state.activeTripId) return;
+    saveState();
+    localStorage.setItem('nifty_force_load_trip', tripId);
+    window.location.reload();
+};
+
+window.createNewTrip = () => {
+    saveState();
+    const newTripId = 'trip_' + Date.now();
+    localStorage.setItem('nifty_force_load_trip', newTripId);
+    
+    const blankState = {
+        stops: [{ id: "1", key: "San Francisco, CA", mode: "drive", days: 1 }],
+        appSettings: { ...state.appSettings, startDate: new Date().toISOString().split('T')[0] },
+        geoDatabase: { "San Francisco, CA": { lat: 37.7749, lng: -122.4194 } },
+        keyDates: [],
+        savedPOIs: [],
+        tripName: "New Trip"
+    };
+    localStorage.setItem(`nifty_trip_${newTripId}`, JSON.stringify(blankState));
+    window.location.reload();
+};
+
+window.deleteTrip = (tripId) => {
+    if (!confirm("Are you sure you want to permanently delete this trip?")) return;
+    localStorage.removeItem(`nifty_trip_${tripId}`);
+    let index = getSavedTripsIndex();
+    index = index.filter(t => t.id !== tripId);
+    localStorage.setItem('nifty_trip_index', JSON.stringify(index));
+    document.getElementById('trip-dropdown-menu').classList.add('hidden');
+    window.toggleTripMenu();
+};
+
+
+// --- DRAG & DROP ---
 
 window.dragStart = (e, index) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -96,17 +129,10 @@ window.drop = (e, targetIndex) => {
     handleStateChange();
 };
 
+// --- GOOGLE API HELPERS ---
+
 function initGoogleServices() {
     if (typeof google !== 'undefined' && !placesService) {
-        // IMPORTANT: PlacesService must be given an actual google.maps.Map
-        // instance, not a raw DOM element. When passed a plain element (as
-        // this used to do via document.getElementById('map')), the Places
-        // library creates its OWN hidden map inside that same div to handle
-        // attribution — which collides with and corrupts the real, visible
-        // map already rendered there, breaking its tile layout permanently
-        // (only a full page reload restores it). Falling back to a detached
-        // scratch div is still fine for the rare case PlacesService is
-        // needed before the real map has finished initializing.
         const mapTarget = state.mapInstance || document.createElement('div');
         placesService = new google.maps.places.PlacesService(mapTarget);
         autocompleteService = new google.maps.places.AutocompleteService();
@@ -126,6 +152,8 @@ async function getPlaceDetails(placeId) {
         });
     });
 }
+
+// --- STOP MANAGEMENT ---
 
 window.beginEditStop = (id) => {
     editingStopId = id;
@@ -153,8 +181,6 @@ window.beginInsertStop = (insertAtIndex) => {
 window.cancelEditStop = (e) => {
     if(e) { e.preventDefault(); e.stopPropagation(); }
     if (editingStopIsNewInsert && editingStopId) {
-        // The stop was just created by the "+" insert button and never got a location —
-        // remove it entirely instead of leaving a blank stop in the list.
         state.stops = state.stops.filter(s => s.id !== editingStopId);
         if (state.stops[0]) state.stops[0].mode = 'drive';
         saveState();
@@ -224,90 +250,7 @@ window.handleEditStopKeydown = (e, id) => {
                 return;
             }
         }
-        // No suggestion to select yet (e.g. results haven't loaded, or the
-        // person typed something with no matches) — there's no place_id to
-        // commit without an actual selection, so just do nothing rather than
-        // silently saving free-text that has no coordinates behind it.
     }
-};
-
-window.renameCurrentTrip = (newName) => {
-    if (!newName.trim()) return;
-    state.tripName = newName.trim();
-    saveState();
-};
-
-window.toggleTripMenu = () => {
-    const menu = document.getElementById('trip-dropdown-menu');
-    const isHidden = menu.classList.contains('hidden');
-    
-    if (isHidden) {
-        // Re-render list before showing
-        const container = document.getElementById('trip-list-container');
-        const trips = getSavedTripsIndex().sort((a, b) => b.updatedAt - a.updatedAt);
-        
-        container.innerHTML = trips.map(t => `
-            <div class="flex items-center justify-between px-3 py-2 hover:bg-gray-50 border-b border-gray-50 group cursor-pointer" onclick="window.switchTrip('${t.id}')">
-                <div class="flex-1 min-w-0 pr-2">
-                    <div class="text-sm font-bold truncate ${t.id === state.activeTripId ? 'text-emerald-600' : 'text-gray-800'}">
-                        ${t.id === state.activeTripId ? '✓ ' : ''}${t.name}
-                    </div>
-                    <div class="text-[9px] text-gray-400">Last updated: ${new Date(t.updatedAt).toLocaleDateString()}</div>
-                </div>
-                ${t.id !== state.activeTripId ? `
-                    <button onclick="event.stopPropagation(); window.deleteTrip('${t.id}')" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs px-2 py-1 font-bold transition-opacity">✕</button>
-                ` : ''}
-            </div>
-        `).join('');
-    }
-    
-    menu.classList.toggle('hidden');
-};
-
-window.switchTrip = (tripId) => {
-    if (tripId === state.activeTripId) return;
-    
-    // Save current before switching just in case
-    saveState();
-    
-    // The safest way to clear the Google Map and completely reset the UI 
-    // without memory leaks is to reload the page with a URL parameter, or 
-    // just let loadState run and rebuild everything. A page reload is cleanest.
-    localStorage.setItem('nifty_force_load_trip', tripId);
-    window.location.reload();
-};
-
-window.createNewTrip = () => {
-    saveState(); // Save current
-    
-    const newTripId = 'trip_' + Date.now();
-    localStorage.setItem('nifty_force_load_trip', newTripId); // Force load this next
-    
-    // Seed it with a blank template
-    const blankState = {
-        stops: [{ id: "1", key: "San Francisco, CA", mode: "drive", days: 1 }],
-        appSettings: { ...state.appSettings, startDate: new Date().toISOString().split('T')[0] },
-        geoDatabase: { "San Francisco, CA": { lat: 37.7749, lng: -122.4194 } },
-        keyDates: [],
-        savedPOIs: [],
-        tripName: "New Trip"
-    };
-    localStorage.setItem(`nifty_trip_${newTripId}`, JSON.stringify(blankState));
-    
-    window.location.reload();
-};
-
-window.deleteTrip = (tripId) => {
-    if (!confirm("Are you sure you want to permanently delete this trip?")) return;
-    
-    localStorage.removeItem(`nifty_trip_${tripId}`);
-    let index = getSavedTripsIndex();
-    index = index.filter(t => t.id !== tripId);
-    localStorage.setItem('nifty_trip_index', JSON.stringify(index));
-    
-    // Close and reopen menu to refresh UI
-    document.getElementById('trip-dropdown-menu').classList.add('hidden');
-    window.toggleTripMenu();
 };
 
 export async function handleSearch(query) {
@@ -348,9 +291,7 @@ export function handleFormSubmit(e) {
 export function handleStateChange() {
     saveState();
     if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI(); 
-    if (typeof window.calculateRoute === 'function') {
-        window.calculateRoute();
-    }
+    if (typeof window.calculateRoute === 'function') window.calculateRoute();
 }
 
 export function toggleModal(open) { document.getElementById('settings-modal').classList.toggle('hidden', !open); }
@@ -397,6 +338,8 @@ export function logConsole(msg) {
         el.scrollTop = el.scrollHeight;
     }
 }
+
+// --- KEY DATES ---
 
 export async function handleKeyDateSearch(query) {
     const resultsBox = document.getElementById('kd-search-results');
@@ -549,9 +492,7 @@ window.saveEditKeyDate = (id) => {
     editingKeyDateId = null;
     tempEditKeyDateGeo = null;
     
-    saveState();
-    renderKeyDatesList();
-    handleStateChange(); 
+    saveState(); renderKeyDatesList(); handleStateChange(); 
 };
 
 export function renderKeyDatesList() {
@@ -577,7 +518,7 @@ export function renderKeyDatesList() {
                         </div>
                         <div class="flex justify-end gap-2 mt-1">
                             <button onclick="window.cancelEditKeyDate(event)" class="text-xs text-gray-500 hover:text-gray-700 font-bold px-2 py-1 transition">Cancel</button>
-                            <button onclick="window.saveEditKeyDate('${kd.id}')" class="text-xs bg-blue-600 hover:bg-blue-500 text-white rounded px-3 py-1 font-bold shadow-sm transition">Save</button>
+                            <button onclick="window.saveEditKeyDate('${kd.id}')" class="text-xs bg-blue-600 hover:bg-blue-50 text-white rounded px-3 py-1 font-bold shadow-sm transition">Save</button>
                         </div>
                     </div>
                 </div>
@@ -616,6 +557,8 @@ function getFallbackStats(prevStop, currentStop) {
     return { miles, hours: currentStop.mode === 'drive' ? Math.round((miles / 62) * 10) / 10 : Math.round(((miles / 500) + 1.5) * 10) / 10 };
 }
 
+// --- POI / CHECKLISTS ---
+
 window.removePOI = (poiId) => {
     if (!state.savedPOIs) return;
     state.savedPOIs = state.savedPOIs.filter(p => p.id !== poiId);
@@ -647,8 +590,6 @@ function renderPoiScanPopoverContent() {
     `;
 }
 
-// target: { type: 'leg', prevIndex, currIndex } | { type: 'stop', stopIndex }
-// anchorEl: the button that was clicked, used to position the popover beside it.
 window.openPoiScanPopover = (target, anchorEl) => {
     poiScanTarget = target;
     let popover = document.getElementById('poi-scan-popover');
@@ -663,7 +604,7 @@ window.openPoiScanPopover = (target, anchorEl) => {
 
     if (anchorEl) {
         const rect = anchorEl.getBoundingClientRect();
-        const popoverWidth = 256; // matches w-64
+        const popoverWidth = 256; 
         let left = rect.left;
         if (left + popoverWidth > window.innerWidth - 8) left = window.innerWidth - popoverWidth - 8;
         popover.style.top = `${rect.bottom + 6}px`;
@@ -690,10 +631,7 @@ window.executePoiScan = () => {
         customInput.value.split(',').map(k => k.trim()).filter(Boolean).forEach(k => keywords.push(k));
     }
 
-    if (keywords.length === 0) {
-        alert('Pick at least one category or enter a custom keyword.');
-        return;
-    }
+    if (keywords.length === 0) return alert('Pick at least one category or enter a custom keyword.');
 
     const target = poiScanTarget;
     window.closePoiScanPopover();
@@ -705,12 +643,6 @@ window.executePoiScan = () => {
     }
 };
 
-// Adds a checklist item to a stop. `place` needs { name, address, lat, lng }
-// at minimum; `sourcePoiId` is set when this came from a saved POI pin so the
-// two stay linked (e.g. for a future "already on this stop's checklist"
-// check), but a checklist item is otherwise a fully independent copy — it
-// does not get removed if the original POI pin is later deleted, and vice
-// versa, since they're allowed to coexist by design.
 function addChecklistItemToStop(stopId, place, note) {
     const stop = state.stops.find(s => s.id === stopId);
     if (!stop) return null;
@@ -753,10 +685,6 @@ function renderAddToChecklistPopoverContent() {
     `;
 }
 
-// Opens the "add to checklist" popover for a specific saved POI. Positioned
-// near the click point (e.g. the button inside a map InfoWindow) rather than
-// anchored to one of our own DOM elements, since InfoWindow content isn't a
-// stable anchor the way a normal button in our own layout is.
 window.openAddToChecklistPopover = (poiId, clickEvent) => {
     checklistAddPoiId = poiId;
     let popover = document.getElementById('add-to-checklist-popover');
@@ -797,11 +725,6 @@ window.confirmAddToChecklist = () => {
 
     addChecklistItemToStop(stopId, { name: poi.name, address: poi.address, lat: poi.lat, lng: poi.lng, sourcePoiId: poi.id }, note);
     window.closeAddToChecklistPopover();
-    // Deliberately NOT calling handleStateChange()/calculateRoute() here —
-    // adding a checklist item doesn't change any stop's location or the
-    // legs between them, so there's nothing to recalculate. calculateRoute()
-    // also ends with fitBounds(), which would re-frame/zoom the map every
-    // time a POI is saved — jarring and unnecessary for a pure data save.
     saveState();
     if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
@@ -823,12 +746,7 @@ window.toggleChecklistItemDone = (stopId, itemId, done) => {
     if (!item) return;
     item.done = done;
     saveState();
-    // Doesn't change row height (done/not-done doesn't add or remove a row),
-    // so a full re-render isn't strictly required, but keeping it consistent
-    // with every other mutation in this file is simpler than special-casing.
     if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
-    // The pin's color reflects done/not-done, so it needs an explicit
-    // refresh — neither renderTimelineUI nor calculateRoute touch map pins.
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
 };
 
@@ -836,19 +754,11 @@ window.removeChecklistItem = (stopId, itemId) => {
     const stop = state.stops.find(s => s.id === stopId);
     if (!stop || !stop.checklistItems) return;
     stop.checklistItems = stop.checklistItems.filter(i => i.id !== itemId);
-    // Same reasoning as confirmAddToChecklist: no stop/leg/distance changed
-    // here, so skip handleStateChange()/calculateRoute() entirely to avoid
-    // an unnecessary fitBounds() re-zoom.
     saveState();
     if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
 };
 
-// Promotes a checklist item into a full standalone Stop, inserted
-// immediately after its current parent stop. Mirrors beginInsertStop's
-// shape, but pre-filled with the checklist item's existing location instead
-// of opening blank — there's already a real place_id-free lat/lng/name/
-// address here, so no search step is needed before it becomes a real stop.
 window.promoteChecklistItemToStop = (stopId, itemId) => {
     const stop = state.stops.find(s => s.id === stopId);
     if (!stop || !stop.checklistItems) return;
@@ -860,18 +770,12 @@ window.promoteChecklistItemToStop = (stopId, itemId) => {
     const parentIndex = state.stops.findIndex(s => s.id === stopId);
     if (parentIndex === -1) return;
 
-    // A checklist item's location string might not match anything already in
-    // geoDatabase (it was never searched as a stop itself), so register it
-    // under its own name, same as any other freshly-added stop.
     state.geoDatabase[item.name] = { lat: item.lat, lng: item.lng };
 
     const newStop = { id: String(Date.now()), key: item.name, mode: 'drive', days: 1, skipped: false };
     state.stops.splice(parentIndex + 1, 0, newStop);
     if (state.stops[0]) state.stops[0].mode = 'drive';
 
-    // The item stays on the original stop's checklist too (promoting doesn't
-    // delete the reminder — if you decide later it wasn't worth a full stop,
-    // the checklist entry is still there).
     handleStateChange();
 };
 
@@ -909,7 +813,7 @@ window.openAddChecklistItemPopover = (stopId, anchorEl) => {
 
     if (anchorEl) {
         const rect = anchorEl.getBoundingClientRect();
-        const popoverWidth = 288; // matches w-72
+        const popoverWidth = 288;
         let left = rect.left;
         if (left + popoverWidth > window.innerWidth - 8) left = window.innerWidth - popoverWidth - 8;
         popover.style.top = `${rect.bottom + 6}px`;
@@ -931,7 +835,7 @@ window.closeAddChecklistItemPopover = () => {
 window.handleChecklistItemSearch = (query) => {
     const resultsBox = document.getElementById('checklist-item-search-results');
     initGoogleServices();
-    checklistItemAddSelectedPlace = null; // typing again invalidates any prior selection
+    checklistItemAddSelectedPlace = null; 
     if (!query || query.length < 3 || !autocompleteService) return resultsBox && resultsBox.classList.add('hidden');
 
     autocompleteService.getPlacePredictions({ input: query }, (predictions, status) => {
@@ -961,17 +865,12 @@ window.handleChecklistItemSearch = (query) => {
 
 window.confirmAddChecklistItem = () => {
     if (!checklistItemAddStopId) return;
-    if (!checklistItemAddSelectedPlace) {
-        alert('Pick a place from the dropdown results first.');
-        return;
-    }
+    if (!checklistItemAddSelectedPlace) return alert('Pick a place from the dropdown results first.');
     const noteInput = document.getElementById('checklist-item-note');
     const note = noteInput ? noteInput.value.trim() : '';
 
     addChecklistItemToStop(checklistItemAddStopId, checklistItemAddSelectedPlace, note);
     window.closeAddChecklistItemPopover();
-    // Same reasoning as the other checklist mutations: no stop/leg changed,
-    // so skip handleStateChange()/calculateRoute() and its fitBounds re-zoom.
     saveState();
     if (typeof window.renderTimelineUI === 'function') window.renderTimelineUI();
     if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
@@ -1011,14 +910,16 @@ function renderStopChecklistSection(stop, stopIndex) {
     `;
 }
 
+// --- CORE UI RENDER ---
+
 export function renderTimelineUI() {
     const counter = document.getElementById('stop-counter');
     if (counter) counter.innerText = `Stops: ${state.stops.length}`;
     
     const activeStops = state.stops.filter(s => !s.skipped);
-    const showActiveStops = true;  // always shown — no longer user-toggleable
+    const showActiveStops = true; 
     const showInactiveStops = state.appSettings.showTimelineInactiveStops !== false;
-    const showTransit = true;      // always shown — no longer user-toggleable
+    const showTransit = true; 
 
     const shortDate = (d) => d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
 
@@ -1027,7 +928,6 @@ export function renderTimelineUI() {
     let uiTotalDriveHours = 0;
     let uiTotalFlightHours = 0;
 
-    // Step 1: Pre-calculate the render view items
     let renderItems = [];
     state.stops.forEach((stop, index) => {
         let item = { stop, index, isSkipped: stop.skipped, isFirstActive: false, isLocked: stop.isKeyDate };
@@ -1055,13 +955,6 @@ export function renderTimelineUI() {
                     displayHours = stop.transitHours || fb.hours;
                     transitDays = stop.transitDays ?? Math.floor(displayHours / 10);
 
-                    // What date would the person actually arrive on, given how
-                    // the timeline has played out so far (previous stops'
-                    // stay lengths plus this leg's transit time) — as opposed
-                    // to the key date's own fixed start, which is what's
-                    // actually displayed. If the natural pace of the trip
-                    // would get them there LATER than the key date requires,
-                    // the rest of the lineup needs adjusting or they'll miss it.
                     const projectedArrive = new Date(currentDate);
                     projectedArrive.setDate(projectedArrive.getDate() + transitDays);
                     item.isOutOfSync = projectedArrive.getTime() > arriveDate.getTime();
@@ -1090,7 +983,6 @@ export function renderTimelineUI() {
         item.departDate = departDate;
         item.prevActiveIdx = prevActiveIdx;
 
-        // INCOMING TRANSIT DATA
         item.incomingTransit = item.isFirstActive ? null : {
             mode: stop.mode || 'drive',
             miles: displayMiles,
@@ -1110,7 +1002,6 @@ export function renderTimelineUI() {
         prevActiveIdx = index;
     });
 
-    // Step 2: Pre-calculate Return Transit
     let finalArriveDate = null;
     let returnTransit = null;
     if (activeStops.length > 1) {
@@ -1138,9 +1029,7 @@ export function renderTimelineUI() {
     }
 
     const finalDateStr = shortDate(finalArriveDate || currentDate);
-    const uiTotalTransitHours = uiTotalDriveHours + uiTotalFlightHours;
 
-    // Step 3: Link Outgoing Transits
     for (let i = 0; i < renderItems.length; i++) {
         let item = renderItems[i];
         if (item.isSkipped) continue;
@@ -1154,44 +1043,6 @@ export function renderTimelineUI() {
         else if (!nextActive && returnTransit) item.outgoingTransit = returnTransit;
     }
 
-    // Step 4: Render UI
-    //
-    // IMPORTANT LAYOUT NOTES ON CONNECTOR LINES / TRANSIT PILLS:
-    //
-    // Bug #1 (fixed previously): each row drew its own outgoing connector line
-    // inside its own normal-flow div, using a per-row z-index of (100 - index)
-    // so stop cards could overlap correctly while dragging. That per-row
-    // z-index created a separate CSS stacking context for every row's
-    // children — so a "skip" connector line spanning several rows got
-    // trapped inside its origin row's stacking context and rendered ON TOP
-    // of the rows/lines it visually passed over. Fix: draw every connector
-    // line into one shared full-height SVG layer, in one coordinate space,
-    // instead of nesting lines inside individual rows.
-    //
-    // Bug #2 (fixed in this pass): the transit PILL itself was still nested
-    // inside its origin row's div, with `top: ${pillTopPx}px` intended as an
-    // absolute offset within the WHOLE timeline. But since the row div was
-    // `position: absolute` (establishing its own positioning context for
-    // children), the pill's `top` was actually relative to its own 34px-tall
-    // row — not the timeline — so pills rendered far outside their row's
-    // bounds, in the wrong place, often invisible behind other rows. Fix:
-    // pills are now pushed into their own shared `pillsHtmlContent` layer and
-    // positioned directly against the outer timeline container, exactly like
-    // the SVG lines, so all three layers (rows, lines, pills) share one
-    // coordinate space keyed off `renderIdx * ROW_HEIGHT_PX`.
-    //
-    // VISUAL ROW LAYOUT: rows no longer all share one fixed height. Two
-    // things make a row taller or skip it entirely:
-    //   1. Hidden inactive rows (showInactiveStops off) take NO space at all
-    //      — same compaction behavior as before checklists existed.
-    //   2. An active row whose checklist is expanded takes its base
-    //      ROW_HEIGHT_PX PLUS the checklist area's height (header + one row
-    //      per item, or an empty-state row if it has none yet).
-    // `visualTopPx[renderIdx]` is each item's actual top offset in pixels
-    // (not a slot number to multiply later), and `heightPx[renderIdx]` is
-    // its real rendered height — every other y-coordinate in this function
-    // (line endpoints, pill centers, the Home row, total timeline height) is
-    // now built from these two arrays instead of `slot * ROW_HEIGHT_PX`.
     const visualTopPx = [];
     const heightPx = [];
     {
@@ -1199,7 +1050,7 @@ export function renderTimelineUI() {
         renderItems.forEach((item, i) => {
             const occupiesSlot = !item.isSkipped || showInactiveStops;
             if (!occupiesSlot) {
-                visualTopPx[i] = null; // takes no space at all
+                visualTopPx[i] = null;
                 heightPx[i] = 0;
                 return;
             }
@@ -1215,11 +1066,11 @@ export function renderTimelineUI() {
             heightPx[i] = rowHeight;
             runningTopPx += rowHeight;
         });
-        visualTopPx.homeRowTopPx = runningTopPx; // Home row's top, appended after everything else
+        visualTopPx.homeRowTopPx = runningTopPx; 
         visualTopPx.totalContentHeightPx = runningTopPx;
     }
 
-    const timelineHeightPx = visualTopPx.totalContentHeightPx + (activeStops.length > 1 ? ROW_HEIGHT_PX : 0); // Home row is always the fixed base height
+    const timelineHeightPx = visualTopPx.totalContentHeightPx + (activeStops.length > 1 ? ROW_HEIGHT_PX : 0);
 
     let lineSvgContent = '';
     let rowsHtmlContent = '';
@@ -1228,17 +1079,15 @@ export function renderTimelineUI() {
     renderItems.forEach((item, renderIdx) => {
         const { stop, index, isSkipped, isFirstActive, isLocked, arriveDate, departDate, outgoingTransit, isOutOfSync, projectedArriveDate } = item;
         const isEditing = editingStopId === stop.id;
-        // A hidden inactive row has visualTopPx[renderIdx] === null and never
-        // reaches any code that reads rowTopPx (it returns early below), so
-        // this is only ever used for rows that actually occupy space.
         const rowTopPx = visualTopPx[renderIdx];
         const rowHeightPx = heightPx[renderIdx];
 
         if (isSkipped) {
             if (showInactiveStops) {
+                // FIXED ANCHORING: stop card pinned to left, perfectly leaving 240px space
                 rowsHtmlContent += `
-                    <div class="absolute left-0 w-[60%] group" style="top: ${rowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: ${100 - index};">
-                        <div class="w-full h-full ${isEditing ? 'bg-white' : 'bg-gray-50 opacity-60 grayscale'} px-2 border border-gray-200 flex items-center justify-between cursor-grab active:cursor-grabbing ${isEditing ? '' : 'hover:bg-gray-100'}"
+                    <div class="absolute left-0 group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: ${100 - index};">
+                        <div class="w-full h-full ${isEditing ? 'bg-white' : 'bg-gray-50 opacity-60 grayscale'} px-2 border border-gray-200 flex items-center justify-between cursor-grab active:cursor-grabbing ${isEditing ? '' : 'hover:bg-gray-100'}" style="position: relative; z-index: ${100 - index};"
                              draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})">
                             <div class="flex items-center gap-1.5 min-w-0 flex-1 relative">
                                 <div class="relative w-[58px] h-5 shrink-0">
@@ -1273,19 +1122,16 @@ export function renderTimelineUI() {
                             `}
                         </div>
                     </div>
-                </div>
-            `;
+                `;
             }
             return;
         }
 
-        // LEFT COLUMN: STOP — positioned absolutely against the shared outer timeline
-        // container (top: renderIdx * ROW_HEIGHT_PX), NOT nested inside any taller
-        // wrapper, so its coordinate space matches the SVG line layer and the pill layer.
+        // FIXED ANCHORING: active stop card pinned to left, leaving 240px space
         if (showActiveStops) {
             const outOfSyncTitle = isOutOfSync ? `At the current pace you'd arrive ${shortDate(projectedArriveDate)}, after this key date's required start of ${shortDate(arriveDate)} — you'll miss it unless earlier stops are shortened or this one is moved up.` : '';
             rowsHtmlContent += `
-                <div class="absolute left-0 w-[60%] group" style="top: ${rowTopPx}px; height: ${rowHeightPx}px; z-index: ${100 - index};">
+                <div class="absolute left-0 group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${rowHeightPx}px; z-index: ${100 - index};">
                     <div class="w-full bg-white px-2 border ${isOutOfSync ? 'border-red-400 ring-1 ring-red-300' : (isLocked ? 'border-amber-400' : 'border-gray-200')} flex items-center justify-between shadow-sm relative hover:bg-gray-50 ${isEditing ? '' : 'cursor-grab active:cursor-grabbing'}" style="height: ${ROW_HEIGHT_PX}px;"
                          draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})" title="${outOfSyncTitle}">
 
@@ -1350,18 +1196,9 @@ export function renderTimelineUI() {
             `;
         }
 
-        // RIGHT COLUMN: TRANSIT PILL + connector line.
-        // Both are pushed into shared, top-level absolute layers (pillsHtmlContent /
-        // lineSvgContent) positioned against the outer timeline container — NOT nested
-        // inside the row div above. Nesting the pill inside a 34px-tall row was the bug
-        // in the previous version: the pill's "top" offset was computed as if it were an
-        // absolute position within the whole timeline, but its actual positioning parent
-        // was the row itself, so it rendered far outside that row's bounds in the wrong
-        // place entirely.
         if (showTransit && outgoingTransit) {
             const isFlight = outgoingTransit.mode === 'flight';
 
-            // Distance (in rows) to the next active stop, counting skipped rows in between.
             let nextActiveRenderIdx = -1;
             for (let j = renderIdx + 1; j < renderItems.length; j++) {
                 if (!renderItems[j].isSkipped) {
@@ -1370,24 +1207,18 @@ export function renderTimelineUI() {
                 }
             }
             const targetRenderIdx = (nextActiveRenderIdx !== -1) ? nextActiveRenderIdx : renderItems.length;
-            // A row's connector-relevant center is always based on its own
-            // 34px stop-card portion — the card renders at the TOP of its
-            // allocated space, with any expanded checklist appearing below
-            // it, so the card's vertical center is always
-            // `top + ROW_HEIGHT_PX/2`, never `top + fullAllocatedHeight/2`.
-            // Using the full height here would visibly drag the pill/line
-            // down to the middle of the checklist area instead of staying
-            // level with the actual stop card.
+            
             const originCenterPx = rowTopPx + ROW_HEIGHT_PX / 2;
             const targetTopPx = (nextActiveRenderIdx !== -1) ? visualTopPx[nextActiveRenderIdx] : visualTopPx.homeRowTopPx;
             const targetCenterPx = targetTopPx + ROW_HEIGHT_PX / 2;
-            // Pill's vertical center sits at the true midpoint between this row and the target row.
             const pillCenterPx = (originCenterPx + targetCenterPx) / 2;
             const pillTopPx = pillCenterPx - (ROW_HEIGHT_PX / 2);
 
+            // FIXED ANCHORING: Transit Pill explicitly pinned to the right edge. 
+            // width 208px + right 8px padding = exactly 216px taken on the right.
             pillsHtmlContent += `
-                <div class="absolute" style="top: ${pillTopPx}px; left: calc(60% + ${GUTTER_WIDTH_PX}px); right: 4px; height: ${ROW_HEIGHT_PX}px; z-index: 20;">
-                    <div class="h-full flex items-center">
+                <div class="absolute" style="top: ${pillTopPx}px; right: 8px; width: 208px; height: ${ROW_HEIGHT_PX}px; z-index: 120;">
+                    <div class="h-full flex items-center justify-end">
                         <div class="w-full bg-white border border-gray-200 rounded-full px-2 py-1 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow">
                             <select onchange="${outgoingTransit.isReturn ? `window.updateSettings('returnMode', this.value)` : `changeMode('${outgoingTransit.id}', this.value)`}" class="bg-transparent text-[11px] focus:outline-none cursor-pointer py-0 w-8 shrink-0">
                                 <option value="drive" ${!isFlight ? 'selected' : ''}>🚗</option>
@@ -1413,25 +1244,13 @@ export function renderTimelineUI() {
                 </div>
             `;
 
-            // --- Connector line for this transit, drawn into the SHARED background SVG ---
-            // Coordinates are absolute pixels within the single shared timeline canvas,
-            // so there is no per-row stacking context to get trapped behind/in front of.
-            //
-            // This restores the original proven zigzag shape: start at the stop-card
-            // edge (x=0%) at this row's center, kink out to the gutter's right edge
-            // (x=100%) at the midpoint between the two rows, then kink back to the
-            // stop-card edge (x=0%) at the NEXT row's center. Both ends touch x=0%
-            // (the stop column), and the single kink point's height is the true
-            // midpoint between the two row centers — so the diagonal's angle scales
-            // smoothly with however many rows are skipped (or expanded with
-            // checklists) in between, instead of assuming uniform row heights.
             const lineColor = isFlight ? '#60a5fa' : '#34d399';
             const dashStyle = isFlight ? 'stroke-dasharray="4 4"' : '';
+            const startY = originCenterPx;   
+            const kinkY = pillCenterPx;       
+            const endY = targetCenterPx;      
 
-            const startY = originCenterPx;   // middle of THIS row's stop card
-            const kinkY = pillCenterPx;       // true midpoint between the two rows
-            const endY = targetCenterPx;      // middle of the NEXT row's stop card (or Home row)
-
+            // SVG is built normally. Container handles horizontal position.
             lineSvgContent += `
                 <g>
                     <line x1="0" y1="${startY}" x2="100%" y2="${kinkY}" stroke="${lineColor}" stroke-width="2" ${dashStyle} />
@@ -1444,8 +1263,9 @@ export function renderTimelineUI() {
     if (activeStops.length > 1) {
         const startStop = activeStops[0];
         const homeRowTopPx = visualTopPx.homeRowTopPx;
+        // FIXED ANCHORING: home row pinned left
         rowsHtmlContent += `
-            <div class="absolute left-0 w-[60%]" style="top: ${homeRowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: 0;">
+            <div class="absolute left-0" style="width: calc(100% - 240px); top: ${homeRowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: 0;">
                 <div class="w-full h-full bg-emerald-50 px-2 border border-emerald-200 flex items-center justify-between shadow-sm relative">
                     <div class="flex items-center gap-1.5 min-w-0 pr-1">
                         <span class="w-5 h-5 shrink-0 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center justify-center text-[10px] font-bold">⌂</span>
@@ -1460,10 +1280,11 @@ export function renderTimelineUI() {
         `;
     }
 
+    // FIXED ANCHORING: Master container handles overflow. SVG pinned to right: 216px
     const htmlContent = `
-        <div class="relative w-full" style="height: ${timelineHeightPx}px;">
+        <div class="relative w-full shrink-0" style="height: ${timelineHeightPx}px;">
             ${showTransit ? `
-            <svg class="absolute pointer-events-none" style="top: 0; left: 60%; width: ${GUTTER_WIDTH_PX}px; height: ${timelineHeightPx}px; z-index: 1; overflow: visible;" preserveAspectRatio="none">
+            <svg class="absolute pointer-events-none" style="top: 0; right: 216px; width: ${GUTTER_WIDTH_PX}px; height: ${timelineHeightPx}px; z-index: 1; overflow: visible;" preserveAspectRatio="none">
                 ${lineSvgContent}
             </svg>
             ` : ''}

@@ -430,10 +430,13 @@ export function renderSavedPOIs() {
     poiMarkers.forEach(m => m.setMap(null));
     poiMarkers = [];
 
+    // If the setting is explicitly false, skip drawing POI markers
+    if (state.appSettings && state.appSettings.showPOIPins === false) {
+        renderChecklistItemPins(); // Still let checklist pins check their own toggle
+        return;
+    }
+
     if (state.savedPOIs && state.savedPOIs.length > 0) {
-        // Collect every POI id that's been added to at least one stop's
-        // checklist, so saved POIs can render with a distinct star marker
-        // instead of the regular dot.
         const savedPoiIds = new Set();
         (state.stops || []).forEach(stop => {
             (stop.checklistItems || []).forEach(item => {
@@ -442,11 +445,6 @@ export function renderSavedPOIs() {
         });
 
         state.savedPOIs.forEach(poi => {
-            // Look up the color assigned to this POI's category in the preset
-            // list (case-insensitive, since the same keyword could come back
-            // with different casing depending on how it was typed/selected).
-            // Custom/free-text keywords that don't match any preset fall back to
-            // red, same as the original default.
             const matchedPreset = POI_PRESET_CATEGORIES.find(cat => cat.keyword.toLowerCase() === poi.type.toLowerCase());
             const iconColor = matchedPreset ? matchedPreset.color : 'red';
             const isSaved = savedPoiIds.has(poi.id);
@@ -470,9 +468,6 @@ export function renderSavedPOIs() {
         });
     }
 
-    // Refreshed alongside POI pins (rather than requiring every call site to
-    // separately remember to call both) so the two pin types never drift out
-    // of sync with each other.
     renderChecklistItemPins();
 }
 
@@ -485,6 +480,8 @@ export function renderChecklistItemPins() {
     checklistMarkers.forEach(m => m.setMap(null));
     checklistMarkers = [];
 
+    // If the setting is explicitly false, skip drawing sub-stop pins
+    if (state.appSettings && state.appSettings.showSubStopPins === false) return;
     if (!state.stops) return;
 
     state.stops.forEach(stop => {

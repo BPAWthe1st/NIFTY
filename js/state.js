@@ -13,6 +13,8 @@ export const state = {
         includeTraffic: false,
         includeChargingDelays: false,
         showTimelineInactiveStops: true,
+        showPOIPins: true,
+        showSubStopPins: true,
         startDate: new Date().toISOString().split('T')[0],
         showTimelineStops: true,
         showTimelineTransit: true,
