@@ -31,6 +31,26 @@ const CHECKLIST_ITEM_PX = 22;
 const CHECKLIST_EMPTY_PX = 22;       
 const CHECKLIST_BOTTOM_PADDING_PX = 6;
 
+// --- ROW MENU HANDLERS ---
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.row-menu-container')) {
+        document.querySelectorAll('.row-menu-dropdown').forEach(el => el.classList.add('hidden'));
+    }
+});
+
+window.toggleRowMenu = (stopId, e) => {
+    e.stopPropagation();
+    const menu = document.getElementById(`row-menu-${stopId}`);
+    const isHidden = menu.classList.contains('hidden');
+    
+    // Close any other open row menus first
+    document.querySelectorAll('.row-menu-dropdown').forEach(el => el.classList.add('hidden'));
+    
+    if (isHidden) {
+        menu.classList.remove('hidden');
+    }
+};
+
 // --- MULTI-TRIP MANAGEMENT ---
 
 window.renameCurrentTrip = (newName) => {
@@ -609,6 +629,12 @@ window.openPoiScanPopover = (target, anchorEl) => {
         if (left + popoverWidth > window.innerWidth - 8) left = window.innerWidth - popoverWidth - 8;
         popover.style.top = `${rect.bottom + 6}px`;
         popover.style.left = `${Math.max(8, left)}px`;
+        popover.style.transform = 'none';
+    } else {
+        // Fallback: Center of the screen if triggered from the context menu
+        popover.style.top = '50%';
+        popover.style.left = '50%';
+        popover.style.transform = 'translate(-50%, -50%)';
     }
 };
 
@@ -1084,41 +1110,47 @@ export function renderTimelineUI() {
 
         if (isSkipped) {
             if (showInactiveStops) {
-                // FIXED ANCHORING: stop card pinned to left, perfectly leaving 240px space
                 rowsHtmlContent += `
-                    <div class="absolute left-0 group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: ${100 - index};">
-                        <div class="w-full h-full ${isEditing ? 'bg-white' : 'bg-gray-50 opacity-60 grayscale'} px-2 border border-gray-200 flex items-center justify-between cursor-grab active:cursor-grabbing ${isEditing ? '' : 'hover:bg-gray-100'}" style="position: relative; z-index: ${100 - index};"
-                             draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})">
-                            <div class="flex items-center gap-1.5 min-w-0 flex-1 relative">
-                                <div class="relative w-[58px] h-5 shrink-0">
-                                    <div class="absolute inset-0 flex items-center gap-1.5 ${isEditing ? '' : 'group-hover:opacity-0 group-hover:pointer-events-none'} transition-opacity">
-                                        <input type="checkbox" onchange="toggleSkip('${stop.id}', !this.checked)" class="w-4 h-4 text-emerald-600 rounded border-gray-300 cursor-pointer shrink-0">
-                                        <span class="w-5 h-5 shrink-0 rounded-full bg-gray-200 border border-gray-300 flex items-center justify-center text-[10px] font-bold text-gray-500 ${isEditing ? '' : 'line-through'}">${index + 1}</span>
-                                    </div>
-                                    ${isEditing ? '' : `
-                                    <div class="absolute inset-0 flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
-                                        <button onclick="window.beginInsertStop(${index})" title="Insert stop before this one"
-                                                class="w-[18px] h-[18px] rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">+</button>
-                                        <button onclick="window.beginEditStop('${stop.id}')" title="Edit location"
-                                                class="w-[18px] h-[18px] rounded-full bg-white border border-gray-300 hover:bg-blue-50 hover:border-blue-300 text-gray-500 hover:text-blue-600 text-[9px] flex items-center justify-center shadow-sm">✏️</button>
-                                        <button onclick="removeStop(${index})" title="Delete stop"
-                                                class="w-[18px] h-[18px] rounded-full bg-white border border-gray-300 hover:bg-red-50 hover:border-red-300 text-red-400 hover:text-red-600 text-[10px] font-bold flex items-center justify-center shadow-sm">✕</button>
-                                    </div>
+                    <div class="absolute left-0 flex items-start group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: ${100 - index};">
+                        
+                        <!-- STOP CARD -->
+                        <div class="flex-1 w-full h-full relative flex items-center justify-between">
+                            
+                            <!-- Faded content wrapper -->
+                            <div class="w-full h-full ${isEditing ? 'bg-white' : 'bg-gray-50 opacity-60 grayscale'} px-2 border border-gray-200 rounded-md flex items-center justify-between cursor-grab active:cursor-grabbing ${isEditing ? '' : 'hover:bg-gray-100'}"
+                                 draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})"
+                                 onmouseenter="if(window.highlightStopMapPin) window.highlightStopMapPin('${stop.id}')"
+                                 onmouseleave="if(window.unhighlightStopMapPin) window.unhighlightStopMapPin('${stop.id}')">
+                                 
+                                <div class="flex items-center gap-2 min-w-0 flex-1 relative">
+                                    <span class="w-5 h-5 shrink-0 rounded-full bg-gray-200 border border-gray-300 flex items-center justify-center text-[10px] font-bold text-gray-500 ${isEditing ? '' : 'line-through'}">${index + 1}</span>
+                                    ${isEditing ? `
+                                        <div class="flex-1 min-w-0 relative">
+                                            <input type="text" id="edit-stop-${stop.id}" value="${stop.key}" oninput="window.handleEditSearch(this.value, '${stop.id}')" onmousedown="event.stopPropagation()" onkeydown="window.handleEditStopKeydown(event, '${stop.id}')" class="w-full text-xs border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-inner z-[100] relative bg-white">
+                                            <div id="edit-results-${stop.id}" class="absolute top-full left-0 bg-white border border-gray-200 shadow-xl z-[150] hidden max-h-48 overflow-y-auto rounded-lg mt-1 overflow-hidden" style="width: max(100%, 420px);"></div>
+                                        </div>
+                                        <button onclick="window.cancelEditStop(event)" class="text-gray-400 hover:text-red-500 text-xs font-bold px-1.5 z-[100] relative">✕</button>
+                                    ` : `
+                                        <h3 class="font-bold text-gray-500 text-xs truncate line-through flex-1 min-w-0" title="${stop.key}">${stop.key}</h3>
                                     `}
                                 </div>
-                                ${isEditing ? `
-                                    <div class="flex-1 min-w-0 relative">
-                                        <input type="text" id="edit-stop-${stop.id}" value="${stop.key}" oninput="window.handleEditSearch(this.value, '${stop.id}')" onmousedown="event.stopPropagation()" onkeydown="window.handleEditStopKeydown(event, '${stop.id}')" class="w-full text-xs border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-inner z-[100] relative bg-white">
-                                        <div id="edit-results-${stop.id}" class="absolute top-full left-0 bg-white border border-gray-200 shadow-xl z-[150] hidden max-h-48 overflow-y-auto rounded-lg mt-1 overflow-hidden" style="width: max(100%, 420px);"></div>
-                                    </div>
-                                    <button onclick="window.cancelEditStop(event)" class="text-gray-400 hover:text-red-500 text-xs font-bold px-1.5 z-[100] relative">✕</button>
-                                ` : `
-                                    <h3 class="font-bold text-gray-500 text-xs truncate line-through flex-1 min-w-0" title="${stop.key}">${stop.key}</h3>
-                                `}
                             </div>
+                            
+                            <!-- MENU OUTSIDE FADED CONTAINER (Crisp & Clear) -->
                             ${isEditing ? '' : `
-                            <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${index}}, this)" title="Search for places near this stop"
-                                    class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-1 w-[18px] h-[18px] rounded-full bg-white border border-gray-300 hover:bg-emerald-50 hover:border-emerald-300 text-gray-500 hover:text-emerald-600 text-[10px] flex items-center justify-center shadow-sm">📍</button>
+                            <div class="absolute right-2 top-1/2 -translate-y-1/2 inline-block text-left row-menu-container z-20">
+                                <button onclick="window.toggleRowMenu('${stop.id}', event)" class="opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded bg-white/80 hover:bg-white border border-gray-200 text-gray-700 flex items-center justify-center font-bold shadow-sm">⋮</button>
+                                <div id="row-menu-${stop.id}" class="row-menu-dropdown hidden absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 shadow-xl rounded-md z-[200] py-1 overflow-hidden">
+                                    <button onclick="toggleSkip('${stop.id}', false)" class="w-full text-left px-3 py-1.5 text-[11px] font-bold text-emerald-600 hover:bg-emerald-50">✓ Enable Stop</button>
+                                    <div class="h-px bg-gray-100 my-1"></div>
+                                    <button onclick="window.beginInsertStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Above</button>
+                                    <button onclick="window.beginInsertStop(${index + 1})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Below</button>
+                                    <button onclick="window.beginEditStop('${stop.id}')" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Edit Location</button>
+                                    <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${index}}, null)" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Find Nearby POIs</button>
+                                    <div class="h-px bg-gray-100 my-1"></div>
+                                    <button onclick="removeStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-bold text-red-600 hover:bg-red-50">Delete</button>
+                                </div>
+                            </div>
                             `}
                         </div>
                     </div>
@@ -1127,71 +1159,74 @@ export function renderTimelineUI() {
             return;
         }
 
-        // FIXED ANCHORING: active stop card pinned to left, leaving 240px space
         if (showActiveStops) {
             const outOfSyncTitle = isOutOfSync ? `At the current pace you'd arrive ${shortDate(projectedArriveDate)}, after this key date's required start of ${shortDate(arriveDate)} — you'll miss it unless earlier stops are shortened or this one is moved up.` : '';
             rowsHtmlContent += `
-                <div class="absolute left-0 group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${rowHeightPx}px; z-index: ${100 - index};">
-                    <div class="w-full bg-white px-2 border ${isOutOfSync ? 'border-red-400 ring-1 ring-red-300' : (isLocked ? 'border-amber-400' : 'border-gray-200')} flex items-center justify-between shadow-sm relative hover:bg-gray-50 ${isEditing ? '' : 'cursor-grab active:cursor-grabbing'}" style="height: ${ROW_HEIGHT_PX}px;"
-                         draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})" title="${outOfSyncTitle}">
+                <div class="absolute left-0 flex items-start group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${rowHeightPx}px; z-index: ${100 - index};">
 
-                        <div class="flex items-center gap-1.5 flex-1 min-w-0 pr-1 relative">
-                            <div class="relative w-[58px] h-5 shrink-0">
-                                <div class="absolute inset-0 flex items-center gap-1.5 ${isEditing ? '' : 'group-hover:opacity-0 group-hover:pointer-events-none'} transition-opacity">
-                                    <input type="checkbox" checked onchange="toggleSkip('${stop.id}', !this.checked)" class="w-4 h-4 text-emerald-600 rounded border-gray-300 cursor-pointer shrink-0">
-                                    <span class="w-5 h-5 shrink-0 rounded-full ${isOutOfSync ? 'bg-red-100 text-red-700' : (isLocked ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600')} border flex items-center justify-center text-[10px] font-bold">${index + 1}</span>
-                                </div>
-                                ${isEditing ? '' : `
-                                <div class="absolute inset-0 flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
-                                    <button onclick="window.beginInsertStop(${index})" title="Insert stop before this one"
-                                            class="w-[18px] h-[18px] rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">+</button>
-                                    <button onclick="window.beginEditStop('${stop.id}')" title="Edit location"
-                                            class="w-[18px] h-[18px] rounded-full bg-white border border-gray-300 hover:bg-blue-50 hover:border-blue-300 text-gray-500 hover:text-blue-600 text-[9px] flex items-center justify-center shadow-sm">✏️</button>
-                                    <button onclick="removeStop(${index})" title="Delete stop"
-                                            class="w-[18px] h-[18px] rounded-full bg-white border border-gray-300 hover:bg-red-50 hover:border-red-300 text-red-400 hover:text-red-600 text-[10px] font-bold flex items-center justify-center shadow-sm">✕</button>
-                                </div>
-                                `}
-                            </div>
+                    <div class="flex-1 w-full relative">
+                        <div class="w-full bg-white px-2 border ${isOutOfSync ? 'border-red-400 ring-1 ring-red-300' : (isLocked ? 'border-amber-400' : 'border-gray-200')} rounded-md flex items-center justify-between shadow-sm relative hover:bg-gray-50 ${isEditing ? '' : 'cursor-grab active:cursor-grabbing'}" style="height: ${ROW_HEIGHT_PX}px;"
+                             draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})" title="${outOfSyncTitle}"
+                             onmouseenter="if(window.highlightStopMapPin) window.highlightStopMapPin('${stop.id}')"
+                             onmouseleave="if(window.unhighlightStopMapPin) window.unhighlightStopMapPin('${stop.id}')">
 
-                            ${isEditing ? `
-                                <div class="flex-1 min-w-0 relative">
-                                    <input type="text" id="edit-stop-${stop.id}" value="${stop.key}" oninput="window.handleEditSearch(this.value, '${stop.id}')" onmousedown="event.stopPropagation()" onkeydown="window.handleEditStopKeydown(event, '${stop.id}')" class="w-full text-xs border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-inner z-[100] relative bg-white">
-                                    <div id="edit-results-${stop.id}" class="absolute top-full left-0 bg-white border border-gray-200 shadow-xl z-[150] hidden max-h-48 overflow-y-auto rounded-lg mt-1 overflow-hidden" style="width: max(100%, 420px);"></div>
-                                </div>
-                                <button onclick="window.cancelEditStop(event)" class="text-gray-400 hover:text-red-500 text-xs font-bold px-1.5 z-[100] relative">✕</button>
-                            ` : `
-                                <h3 class="font-bold ${isOutOfSync ? 'text-red-700' : (isLocked ? 'text-amber-700' : 'text-gray-800')} text-xs truncate flex-1 min-w-0" title="${stop.key}">${isOutOfSync ? '⚠️ ' : ''}${stop.key}</h3>
-                            `}
-                        </div>
+                            <div class="flex items-center gap-2 flex-1 min-w-0 pr-1 relative">
+                                <span class="w-5 h-5 shrink-0 rounded-full ${isOutOfSync ? 'bg-red-100 text-red-700' : (isLocked ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600')} border flex items-center justify-center text-[10px] font-bold">${index + 1}</span>
 
-                        ${isFirstActive ? `
-                            <div class="flex items-center gap-1 shrink-0">
-                                <input type="date" value="${state.appSettings.startDate}" onchange="updateStartDate(this.value)" class="bg-gray-50 border border-gray-200 rounded px-1 py-0 text-emerald-600 text-[10px] font-bold focus:outline-none w-[90px]">
-                                <span class="text-[10px] font-bold text-amber-600">Ret: ${finalDateStr}</span>
-                            </div>
-                        ` : `
-                            <div class="flex items-center gap-2 shrink-0">
-                                ${isLocked ? `
-                                    <span class="text-[10px] font-bold rounded px-1 border ${isOutOfSync ? 'text-red-700 bg-red-50 border-red-200' : 'text-amber-600 bg-amber-50 border-amber-100'}">${isOutOfSync ? '⚠️' : '🔒'} ${stop.days}d</span>
-                                ` : `
-                                    <div class="flex items-center bg-gray-50 rounded px-1 border border-gray-200">
-                                        <span class="text-[9px] text-gray-400 font-bold mr-0.5">Stay:</span>
-                                        <input type="number" value="${stop.days}" oninput="changeDays('${stop.id}', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" class="w-6 bg-transparent text-gray-900 font-bold text-[11px] text-center focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                ${isEditing ? `
+                                    <div class="flex-1 min-w-0 relative">
+                                        <input type="text" id="edit-stop-${stop.id}" value="${stop.key}" oninput="window.handleEditSearch(this.value, '${stop.id}')" onmousedown="event.stopPropagation()" onkeydown="window.handleEditStopKeydown(event, '${stop.id}')" class="w-full text-xs border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-inner z-[100] relative bg-white">
+                                        <div id="edit-results-${stop.id}" class="absolute top-full left-0 bg-white border border-gray-200 shadow-xl z-[150] hidden max-h-48 overflow-y-auto rounded-lg mt-1 overflow-hidden" style="width: max(100%, 420px);"></div>
                                     </div>
+                                    <button onclick="window.cancelEditStop(event)" class="text-gray-400 hover:text-red-500 text-xs font-bold px-1.5 z-[100] relative">✕</button>
+                                ` : `
+                                    <h3 class="font-bold ${isOutOfSync ? 'text-red-700' : (isLocked ? 'text-amber-700' : 'text-gray-800')} text-xs truncate flex-1 min-w-0" title="${stop.key}">${isOutOfSync ? '⚠️ ' : ''}${stop.key}</h3>
                                 `}
-                                <div class="text-[10px] font-bold flex items-center gap-0.5">
-                                    <span class="text-emerald-600">${shortDate(arriveDate)}</span>
-                                    <span class="text-gray-300">-</span>
-                                    <span class="text-amber-600">${shortDate(departDate)}</span>
+                            </div>
+
+                            ${isFirstActive ? `
+                                <div class="flex items-center gap-1 shrink-0">
+                                    <input type="date" value="${state.appSettings.startDate}" onchange="updateStartDate(this.value)" class="bg-gray-50 border border-gray-200 rounded px-1 py-0 text-emerald-600 text-[10px] font-bold focus:outline-none w-[90px]">
+                                    <span class="text-[10px] font-bold text-amber-600">Ret: ${finalDateStr}</span>
+                                </div>
+                            ` : `
+                                <div class="flex items-center gap-2 shrink-0">
+                                    ${isLocked ? `
+                                        <span class="text-[10px] font-bold rounded px-1 border ${isOutOfSync ? 'text-red-700 bg-red-50 border-red-200' : 'text-amber-600 bg-amber-50 border-amber-100'}">${isOutOfSync ? '⚠️' : '🔒'} ${stop.days}d</span>
+                                    ` : `
+                                        <div class="flex items-center bg-gray-50 rounded px-1 border border-gray-200">
+                                            <span class="text-[9px] text-gray-400 font-bold mr-0.5">Stay:</span>
+                                            <input type="number" value="${stop.days}" oninput="changeDays('${stop.id}', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" class="w-6 bg-transparent text-gray-900 font-bold text-[11px] text-center focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                        </div>
+                                    `}
+                                    <div class="text-[10px] font-bold flex items-center gap-0.5">
+                                        <span class="text-emerald-600">${shortDate(arriveDate)}</span>
+                                        <span class="text-gray-300">-</span>
+                                        <span class="text-amber-600">${shortDate(departDate)}</span>
+                                    </div>
+                                </div>
+                            `}
+                            
+                            <button onclick="window.toggleStopChecklist('${stop.id}')" title="${expandedChecklistStopIds.has(stop.id) ? 'Hide' : 'Show'} checklist"
+                                    class="shrink-0 ml-1.5 h-[18px] min-w-[18px] px-1 rounded-full border text-[9px] font-bold flex items-center justify-center shadow-sm transition-colors ${(stop.checklistItems && stop.checklistItems.length > 0) ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-white border-gray-300 text-gray-400 opacity-0 group-hover:opacity-100'} ${expandedChecklistStopIds.has(stop.id) ? 'ring-1 ring-emerald-400' : ''}">📋${(stop.checklistItems && stop.checklistItems.length > 0) ? ' ' + stop.checklistItems.length : ''}</button>
+                                    
+                            <!-- MENU WITH 'DISABLE STOP' -->
+                            <div class="relative inline-block text-left ml-1 row-menu-container shrink-0">
+                                <button onclick="window.toggleRowMenu('${stop.id}', event)" class="opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded hover:bg-gray-200 text-gray-500 flex items-center justify-center font-bold">⋮</button>
+                                <div id="row-menu-${stop.id}" class="row-menu-dropdown hidden absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 shadow-xl rounded-md z-[200] py-1 overflow-hidden">
+                                    <button onclick="toggleSkip('${stop.id}', true)" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">🚫 Disable Stop</button>
+                                    <div class="h-px bg-gray-100 my-1"></div>
+                                    <button onclick="window.beginInsertStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Above</button>
+                                    <button onclick="window.beginInsertStop(${index + 1})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Below</button>
+                                    <button onclick="window.beginEditStop('${stop.id}')" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Edit Location</button>
+                                    <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${index}}, null)" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Find Nearby POIs</button>
+                                    <div class="h-px bg-gray-100 my-1"></div>
+                                    <button onclick="removeStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-bold text-red-600 hover:bg-red-50">Delete</button>
                                 </div>
                             </div>
-                        `}
-                        <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${index}}, this)" title="Search for places near this stop"
-                                class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-1 w-[18px] h-[18px] rounded-full bg-white border border-gray-300 hover:bg-emerald-50 hover:border-emerald-300 text-gray-500 hover:text-emerald-600 text-[10px] flex items-center justify-center shadow-sm">📍</button>
-                        <button onclick="window.toggleStopChecklist('${stop.id}')" title="${expandedChecklistStopIds.has(stop.id) ? 'Hide' : 'Show'} checklist"
-                                class="shrink-0 ml-1 h-[18px] min-w-[18px] px-1 rounded-full border text-[9px] font-bold flex items-center justify-center shadow-sm transition-colors ${(stop.checklistItems && stop.checklistItems.length > 0) ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-white border-gray-300 text-gray-400 opacity-0 group-hover:opacity-100'} ${expandedChecklistStopIds.has(stop.id) ? 'ring-1 ring-emerald-400' : ''}">📋${(stop.checklistItems && stop.checklistItems.length > 0) ? ' ' + stop.checklistItems.length : ''}</button>
+                        </div>
+                        ${renderStopChecklistSection(stop, index)}
                     </div>
-                    ${renderStopChecklistSection(stop, index)}
                 </div>
             `;
         }
@@ -1263,11 +1298,10 @@ export function renderTimelineUI() {
     if (activeStops.length > 1) {
         const startStop = activeStops[0];
         const homeRowTopPx = visualTopPx.homeRowTopPx;
-        // FIXED ANCHORING: home row pinned left
         rowsHtmlContent += `
-            <div class="absolute left-0" style="width: calc(100% - 240px); top: ${homeRowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: 0;">
-                <div class="w-full h-full bg-emerald-50 px-2 border border-emerald-200 flex items-center justify-between shadow-sm relative">
-                    <div class="flex items-center gap-1.5 min-w-0 pr-1">
+            <div class="absolute left-0 flex items-start" style="width: calc(100% - 240px); top: ${homeRowTopPx}px; height: ${ROW_HEIGHT_PX}px; z-index: 0;">
+                <div class="flex-1 w-full h-full bg-emerald-50 px-2 border border-emerald-200 rounded-md flex items-center justify-between shadow-sm relative">
+                    <div class="flex items-center gap-2 min-w-0 pr-1">
                         <span class="w-5 h-5 shrink-0 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center justify-center text-[10px] font-bold">⌂</span>
                         <h3 class="font-bold text-emerald-800 text-xs truncate">${startStop.key} (Home)</h3>
                     </div>

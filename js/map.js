@@ -125,6 +125,7 @@ export async function calculateRoute() {
                 },
                 title: stop.key + (isSkipped ? " (Skipped)" : "")
             });
+            marker.stopId = stop.id;
             state.mapLayers.push(marker);
         }
         if (!stop.skipped) totalStayDays += stop.days || 0;
@@ -586,3 +587,37 @@ window.scanStopForPOIs = (stopIndex, keywords, searchRadiusMiles = 15) => {
 
 window.renderSavedPOIs = renderSavedPOIs;
 window.scanRouteForPOIs = scanRouteForPOIs;
+
+window.highlightStopMapPin = (stopId) => {
+    if (!state.mapLayers) return;
+    const marker = state.mapLayers.find(layer => layer.stopId === stopId);
+    if (marker) {
+        // Save the original state so we can restore it exactly
+        if (!marker.originalIcon) {
+            marker.originalIcon = marker.getIcon();
+            marker.originalZIndex = marker.getZIndex() || 0;
+        }
+        
+        // Create a prominent, scaled-up blue highlight version of the pin
+        const highlightIcon = { 
+            ...marker.originalIcon, 
+            scale: 16, 
+            fillColor: '#0ea5e9', 
+            strokeColor: '#0369a1', 
+            strokeWeight: 3 
+        };
+        
+        marker.setIcon(highlightIcon);
+        marker.setZIndex(9999);
+    }
+};
+
+window.unhighlightStopMapPin = (stopId) => {
+    if (!state.mapLayers) return;
+    const marker = state.mapLayers.find(layer => layer.stopId === stopId);
+    if (marker && marker.originalIcon) {
+        // Restore exactly as it was
+        marker.setIcon(marker.originalIcon);
+        marker.setZIndex(marker.originalZIndex);
+    }
+};
