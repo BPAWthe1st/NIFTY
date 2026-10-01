@@ -153,7 +153,8 @@ window.drop = (e, targetIndex) => {
 
 function initGoogleServices() {
     if (typeof google !== 'undefined' && !placesService) {
-        const mapTarget = state.mapInstance || document.createElement('div');
+        // Fallback safely to the actual map container DOM element
+        const mapTarget = state.mapInstance || document.getElementById('map') || document.createElement('div');
         placesService = new google.maps.places.PlacesService(mapTarget);
         autocompleteService = new google.maps.places.AutocompleteService();
     }
@@ -611,18 +612,26 @@ function renderPoiScanPopoverContent() {
 }
 
 window.openPoiScanPopover = (target, anchorEl) => {
+    console.log("POI Scan Triggered!", target);
     poiScanTarget = target;
+    
+    // Close any open row dropdown menus
+    document.querySelectorAll('.row-menu-dropdown').forEach(el => el.classList.add('hidden'));
+
     let popover = document.getElementById('poi-scan-popover');
     if (!popover) {
         popover = document.createElement('div');
         popover.id = 'poi-scan-popover';
-        popover.className = 'fixed bg-white border border-gray-200 rounded-lg shadow-2xl p-3 z-[3000] w-64';
+        // Bumped z-index to 5000 just to be absolutely certain it's on top
+        popover.className = 'fixed bg-white border border-gray-200 rounded-lg shadow-2xl p-3 z-[5000] w-64';
         document.body.appendChild(popover);
     }
+    
     renderPoiScanPopoverContent();
     popover.classList.remove('hidden');
 
-    if (anchorEl) {
+    if (anchorEl && typeof anchorEl.getBoundingClientRect === 'function') {
+        // Used by the Transit Leg (📍) button to position right next to the leg
         const rect = anchorEl.getBoundingClientRect();
         const popoverWidth = 256; 
         let left = rect.left;
@@ -631,7 +640,7 @@ window.openPoiScanPopover = (target, anchorEl) => {
         popover.style.left = `${Math.max(8, left)}px`;
         popover.style.transform = 'none';
     } else {
-        // Fallback: Center of the screen if triggered from the context menu
+        // Used by the Dropdown menu to center cleanly on the screen
         popover.style.top = '50%';
         popover.style.left = '50%';
         popover.style.transform = 'translate(-50%, -50%)';
@@ -663,9 +672,117 @@ window.executePoiScan = () => {
     window.closePoiScanPopover();
 
     if (target.type === 'leg') {
-        window.scanSpecificLeg(target.prevIndex, target.currIndex, keywords);
+        if (typeof window.scanSpecificLeg === 'function') {
+            window.scanSpecificLeg(target.prevIndex, target.currIndex, keywords);
+        }
     } else if (target.type === 'stop') {
-        window.scanStopForPOIs(target.stopIndex, keywords);
+        if (typeof window.scanStopForPOIs === 'function') {
+            window.scanStopForPOIs(target.stopIndex, keywords);
+        }
+    }
+};
+
+// --- GOOGLE PLACES API SCAN ENGINE ---
+
+window.scanStopForPOIs = async (stopIndex, keywords) => {
+    const stop = state.stops[stopIndex];
+    if (!stop) return alert('Stop not found.');
+    const geo = state.geoDatabase[stop.key];
+    if (!geo || typeof geo.lat !== 'number' || typeof geo.lng !== 'number') {
+        return alert(`Coordinates not found for ${stop.key}`);
+    }
+
+    initGoogleServices();
+    if (!placesService) return alert('Google Places service not initialized.');
+
+    if (!state.savedPOIs) state.savedPOIs = [];
+    let totalFound = 0;
+    const location = new google.maps.LatLng(geo.lat, geo.lng);
+
+    for (const keyword of keywords) {
+        await new Promise((resolve) => {
+            const request = { location: location, radius: 15000, keyword: keyword };
+            placesService.nearbySearch(request, (results, status) => {
+                if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+                    results.slice(0, 5).forEach(place => {
+                        const exists = state.savedPOIs.some(p => p.id === place.place_id || p.name === place.name);
+                        if (!exists) {
+                            state.savedPOIs.push({
+                                id: place.place_id || String(Date.now()) + Math.random().toString(36).slice(2, 6),
+                                name: place.name,
+                                address: place.vicinity || place.formatted_address || '',
+                                lat: place.geometry.location.lat(),
+                                lng: place.geometry.location.lng(),
+                                type: keyword
+                            });
+                            totalFound++;
+                        }
+                    });
+                }
+                resolve();
+            });
+        });
+    }
+
+    saveState();
+    if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
+    if (totalFound > 0) {
+        alert(`Found and added ${totalFound} new POI(s) near ${stop.key}!`);
+    } else {
+        alert(`No new places found near ${stop.key} for the selected keywords.`);
+    }
+};
+
+window.scanSpecificLeg = async (prevIndex, currIndex, keywords) => {
+    const prevStop = state.stops[prevIndex];
+    const currStop = state.stops[currIndex];
+    if (!prevStop || !currStop) return alert('Leg endpoints not found.');
+
+    const prevGeo = state.geoDatabase[prevStop.key];
+    const currGeo = state.geoDatabase[currStop.key];
+    if (!prevGeo || !currGeo) return alert('Coordinates missing for leg endpoints.');
+
+    const midLat = (prevGeo.lat + currGeo.lat) / 2;
+    const midLng = (prevGeo.lng + currGeo.lng) / 2;
+
+    initGoogleServices();
+    if (!placesService) return alert('Google Places service not initialized.');
+
+    if (!state.savedPOIs) state.savedPOIs = [];
+    let totalFound = 0;
+    const location = new google.maps.LatLng(midLat, midLng);
+
+    for (const keyword of keywords) {
+        await new Promise((resolve) => {
+            const request = { location: location, radius: 25000, keyword: keyword };
+            placesService.nearbySearch(request, (results, status) => {
+                if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+                    results.slice(0, 5).forEach(place => {
+                        const exists = state.savedPOIs.some(p => p.id === place.place_id || p.name === place.name);
+                        if (!exists) {
+                            state.savedPOIs.push({
+                                id: place.place_id || String(Date.now()) + Math.random().toString(36).slice(2, 6),
+                                name: place.name,
+                                address: place.vicinity || place.formatted_address || '',
+                                lat: place.geometry.location.lat(),
+                                lng: place.geometry.location.lng(),
+                                type: keyword
+                            });
+                            totalFound++;
+                        }
+                    });
+                }
+                resolve();
+            });
+        });
+    }
+
+    saveState();
+    if (typeof window.renderSavedPOIs === 'function') window.renderSavedPOIs();
+    if (totalFound > 0) {
+        alert(`Found and added ${totalFound} new POI(s) along the route!`);
+    } else {
+        alert(`No new places found along this leg for the selected keywords.`);
     }
 };
 
@@ -1117,7 +1234,7 @@ export function renderTimelineUI() {
                         <div class="flex-1 w-full h-full relative flex items-center justify-between">
                             
                             <!-- Faded content wrapper -->
-                            <div class="w-full h-full ${isEditing ? 'bg-white' : 'bg-gray-50 opacity-60 grayscale'} px-2 border border-gray-200 rounded-md flex items-center justify-between cursor-grab active:cursor-grabbing ${isEditing ? '' : 'hover:bg-gray-100'}"
+                            <div id="stop-card-${stop.id}" class="w-full h-full ${isEditing ? 'bg-white' : 'bg-gray-50 opacity-60 grayscale'} px-2 border border-gray-200 rounded-md flex items-center justify-between cursor-grab active:cursor-grabbing ${isEditing ? '' : 'hover:bg-gray-100'}"
                                  draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})"
                                  onmouseenter="if(window.highlightStopMapPin) window.highlightStopMapPin('${stop.id}')"
                                  onmouseleave="if(window.unhighlightStopMapPin) window.unhighlightStopMapPin('${stop.id}')">
@@ -1143,11 +1260,10 @@ export function renderTimelineUI() {
                                 <div id="row-menu-${stop.id}" class="row-menu-dropdown hidden absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 shadow-xl rounded-md z-[200] py-1 overflow-hidden">
                                     <button onclick="toggleSkip('${stop.id}', false)" class="w-full text-left px-3 py-1.5 text-[11px] font-bold text-emerald-600 hover:bg-emerald-50">✓ Enable Stop</button>
                                     <div class="h-px bg-gray-100 my-1"></div>
-                                    <button onclick="window.beginInsertStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Above</button>
-                                    <button onclick="window.beginInsertStop(${index + 1})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Below</button>
+                                    <button onclick="window.beginInsertStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Add Stop Above</button>
+                                    <button onclick="window.beginInsertStop(${index + 1})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Add Stop Below</button>
                                     <button onclick="window.beginEditStop('${stop.id}')" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Edit Location</button>
-                                    <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${index}}, null)" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Find Nearby POIs</button>
-                                    <div class="h-px bg-gray-100 my-1"></div>
+                                    <button onclick="event.stopPropagation(); window.openPoiScanPopover({type:'stop', stopIndex:${index}}, null);" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Find Nearby POIs</button>                                    <div class="h-px bg-gray-100 my-1"></div>
                                     <button onclick="removeStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-bold text-red-600 hover:bg-red-50">Delete</button>
                                 </div>
                             </div>
@@ -1165,7 +1281,7 @@ export function renderTimelineUI() {
                 <div class="absolute left-0 flex items-start group" style="width: calc(100% - 240px); top: ${rowTopPx}px; height: ${rowHeightPx}px; z-index: ${100 - index};">
 
                     <div class="flex-1 w-full relative">
-                        <div class="w-full bg-white px-2 border ${isOutOfSync ? 'border-red-400 ring-1 ring-red-300' : (isLocked ? 'border-amber-400' : 'border-gray-200')} rounded-md flex items-center justify-between shadow-sm relative hover:bg-gray-50 ${isEditing ? '' : 'cursor-grab active:cursor-grabbing'}" style="height: ${ROW_HEIGHT_PX}px;"
+                        <div id="stop-card-${stop.id}" class="w-full bg-white px-2 border ${isOutOfSync ? 'border-red-400 ring-1 ring-red-300' : (isLocked ? 'border-amber-400' : 'border-gray-200')} rounded-md flex items-center justify-between shadow-sm relative hover:bg-gray-50 ${isEditing ? '' : 'cursor-grab active:cursor-grabbing'}" style="height: ${ROW_HEIGHT_PX}px;"
                              draggable="${!isEditing}" ondragstart="${!isEditing ? `dragStart(event, ${index})` : ''}" ondragover="dragOver(event)" ondragend="dragEnd(event)" ondrop="drop(event, ${index})" title="${outOfSyncTitle}"
                              onmouseenter="if(window.highlightStopMapPin) window.highlightStopMapPin('${stop.id}')"
                              onmouseleave="if(window.unhighlightStopMapPin) window.unhighlightStopMapPin('${stop.id}')">
@@ -1216,10 +1332,10 @@ export function renderTimelineUI() {
                                 <div id="row-menu-${stop.id}" class="row-menu-dropdown hidden absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 shadow-xl rounded-md z-[200] py-1 overflow-hidden">
                                     <button onclick="toggleSkip('${stop.id}', true)" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">🚫 Disable Stop</button>
                                     <div class="h-px bg-gray-100 my-1"></div>
-                                    <button onclick="window.beginInsertStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Above</button>
-                                    <button onclick="window.beginInsertStop(${index + 1})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Insert Below</button>
+                                    <button onclick="window.beginInsertStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Add Stop Above</button>
+                                    <button onclick="window.beginInsertStop(${index + 1})" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Add Stop Below</button>
                                     <button onclick="window.beginEditStop('${stop.id}')" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Edit Location</button>
-                                    <button onclick="window.openPoiScanPopover({type:'stop', stopIndex:${index}}, null)" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Find Nearby POIs</button>
+                                    <button onclick="event.stopPropagation(); window.openPoiScanPopover({type:'stop', stopIndex:${index}}, null);" class="w-full text-left px-3 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Find Nearby POIs</button>
                                     <div class="h-px bg-gray-100 my-1"></div>
                                     <button onclick="removeStop(${index})" class="w-full text-left px-3 py-1.5 text-[11px] font-bold text-red-600 hover:bg-red-50">Delete</button>
                                 </div>
@@ -1330,3 +1446,31 @@ export function renderTimelineUI() {
     const timelineContainer = document.getElementById('timeline-container');
     if (timelineContainer) timelineContainer.innerHTML = htmlContent;
 }
+
+window.highlightTimelineRow = (stopId) => {
+    const card = document.getElementById(`stop-card-${stopId}`);
+    if (card) {
+        // Smoothly scroll the timeline to show this card if it's out of view
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        
+        // Apply the highlight effects
+        card.style.transition = 'all 0.2s ease-in-out';
+        card.style.outline = '2px solid #0ea5e9'; // Blue ring
+        card.style.outlineOffset = '-1px';
+        card.style.backgroundColor = '#f0f9ff'; // Light blue background
+        card.style.transform = 'scale(1.01)';
+        card.style.zIndex = '50';
+    }
+};
+
+window.unhighlightTimelineRow = (stopId) => {
+    const card = document.getElementById(`stop-card-${stopId}`);
+    if (card) {
+        // Remove the highlight effects to let Tailwind classes take over again
+        card.style.outline = '';
+        card.style.outlineOffset = '';
+        card.style.backgroundColor = '';
+        card.style.transform = '';
+        card.style.zIndex = '';
+    }
+};

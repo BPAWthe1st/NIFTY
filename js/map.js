@@ -127,6 +127,14 @@ export async function calculateRoute() {
             });
             marker.stopId = stop.id;
             state.mapLayers.push(marker);
+
+            marker.addListener('mouseover', () => {
+                if (window.highlightTimelineRow) window.highlightTimelineRow(stop.id);
+            });
+
+            marker.addListener('mouseout', () => {
+                if (window.unhighlightTimelineRow) window.unhighlightTimelineRow(stop.id);
+            });
         }
         if (!stop.skipped) totalStayDays += stop.days || 0;
     });
